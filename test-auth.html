@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supabase Auth Test</title>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <h1>Supabase Auth Test</h1>
+    <div id="status">Testing...</div>
+    <button onclick="testAuth()">Test Auth</button>
+    <button onclick="testSignIn()">Test Sign In</button>
+
+    <script>
+        const supabaseUrl = 'https://dlesebbmlrewsbmqvuza.supabase.co';
+        const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRsZXNlYmJtbHJld3NibXF2dXphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ1NTMxMTcsImV4cCI6MjA3MDEyOTExN30.zFTVSgL5QpVqEDc-nQuKbaG_3egHZEm-V17UvkOpFCQ';
+
+        const supabase = supabase.createClient(supabaseUrl, supabaseAnonKey);
+
+        async function testAuth() {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = 'Testing auth connection...';
+            
+            try {
+                const { data, error } = await supabase.auth.getUser();
+                if (error) {
+                    statusDiv.textContent = 'Auth test failed: ' + error.message;
+                } else {
+                    statusDiv.textContent = 'Auth test successful: ' + (data.user ? data.user.email : 'No user');
+                }
+            } catch (error) {
+                statusDiv.textContent = 'Auth test error: ' + error.message;
+            }
+        }
+
+        async function testSignIn() {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = 'Testing sign in...';
+            
+            try {
+                const { data, error } = await supabase.auth.signInWithPassword({
+                    email: 'test@example.com',
+                    password: 'wrongpassword'
+                });
+                if (error) {
+                    statusDiv.textContent = 'Sign in test completed (expected error): ' + error.message;
+                } else {
+                    statusDiv.textContent = 'Sign in test successful: ' + data.user.email;
+                }
+            } catch (error) {
+                statusDiv.textContent = 'Sign in test error: ' + error.message;
+            }
+        }
+
+        // Test on page load
+        testAuth();
+    </script>
+</body>
+</html>
+

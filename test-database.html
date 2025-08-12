@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Database Test</title>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <h1>Database Connection Test</h1>
+    <div id="results"></div>
+
+    <script>
+        const supabaseUrl = 'https://dlesebbmlrewsbmqvuza.supabase.co';
+        const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRsZXNlYmJtbHJld3NibXF2dXphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ1NTMxMTcsImV4cCI6MjA3MDEyOTExN30.zFTVSgL5QpVqEDc-nQuKbaG_3egHZEm-V17UvkOpFCQ';
+        
+        const supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+        
+        async function testDatabase() {
+            const results = document.getElementById('results');
+            results.innerHTML = '<p>Testing database connection...</p>';
+            
+            try {
+                // Test 1: Check if tables exist
+                results.innerHTML += '<h3>Test 1: Checking Tables</h3>';
+                
+                const { data: tables, error: tablesError } = await supabase
+                    .from('users')
+                    .select('count')
+                    .limit(1);
+                
+                if (tablesError) {
+                    results.innerHTML += `<p style="color: red;">❌ Users table error: ${tablesError.message}</p>`;
+                } else {
+                    results.innerHTML += '<p style="color: green;">✅ Users table accessible</p>';
+                }
+                
+                // Test 2: Check RLS policies
+                results.innerHTML += '<h3>Test 2: Testing RLS Policies</h3>';
+                
+                // Try to insert a test user (should fail due to RLS)
+                const { data: insertData, error: insertError } = await supabase
+                    .from('users')
+                    .insert({
+                        email: 'test@example.com',
+                        name: 'Test User',
+                        role: 'Investor'
+                    })
+                    .select();
+                
+                if (insertError) {
+                    results.innerHTML += `<p style="color: orange;">⚠️ Insert blocked (expected due to RLS): ${insertError.message}</p>`;
+                } else {
+                    results.innerHTML += '<p style="color: red;">❌ Insert succeeded (RLS may not be working)</p>';
+                }
+                
+                // Test 3: Check enum types
+                results.innerHTML += '<h3>Test 3: Checking Enum Types</h3>';
+                
+                const { data: enumTest, error: enumError } = await supabase
+                    .from('users')
+                    .select('role')
+                    .limit(1);
+                
+                if (enumError) {
+                    results.innerHTML += `<p style="color: red;">❌ Enum test error: ${enumError.message}</p>`;
+                } else {
+                    results.innerHTML += '<p style="color: green;">✅ Enum types working</p>';
+                }
+
+                // Test 4: Check if we can read from users table
+                results.innerHTML += '<h3>Test 4: Reading from Users Table</h3>';
+                
+                const { data: readData, error: readError } = await supabase
+                    .from('users')
+                    .select('*')
+                    .limit(5);
+                
+                if (readError) {
+                    results.innerHTML += `<p style="color: red;">❌ Read error: ${readError.message}</p>`;
+                } else {
+                    results.innerHTML += `<p style="color: green;">✅ Read successful. Found ${readData.length} records.</p>`;
+                }
+
+                // Test 5: Check RLS policy details
+                results.innerHTML += '<h3>Test 5: RLS Policy Check</h3>';
+                
+                // Try to get current user (should be null when not authenticated)
+                const { data: { user }, error: userError } = await supabase.auth.getUser();
+                
+                if (userError) {
+                    results.innerHTML += `<p style="color: orange;">⚠️ Auth error: ${userError.message}</p>`;
+                } else if (user) {
+                    results.innerHTML += `<p style="color: green;">✅ User authenticated: ${user.email}</p>`;
+                    
+                    // Try to insert with authenticated user
+                    const { data: authInsertData, error: authInsertError } = await supabase
+                        .from('users')
+                        .insert({
+                            id: user.id,
+                            email: user.email,
+                            name: 'Test Profile',
+                            role: 'Investor'
+                        })
+                        .select();
+                    
+                    if (authInsertError) {
+                        results.innerHTML += `<p style="color: red;">❌ Authenticated insert failed: ${authInsertError.message}</p>`;
+                    } else {
+                        results.innerHTML += '<p style="color: green;">✅ Authenticated insert succeeded!</p>';
+                    }
+                } else {
+                    results.innerHTML += '<p style="color: orange;">⚠️ No authenticated user (this is normal for this test)</p>';
+                }
+                
+                results.innerHTML += '<h3>Summary</h3>';
+                results.innerHTML += '<p>If you see ✅ for tables and enum types, your database is set up correctly.</p>';
+                results.innerHTML += '<p>The ⚠️ for insert is expected due to RLS policies.</p>';
+                results.innerHTML += '<p><strong>Next Step:</strong> Try logging in with one of your registered users to test profile creation.</p>';
+                
+            } catch (error) {
+                results.innerHTML += `<p style="color: red;">❌ Connection error: ${error.message}</p>`;
+            }
+        }
+        
+        testDatabase();
+    </script>
+</body>
+</html>

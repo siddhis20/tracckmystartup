@@ -1,0 +1,6 @@
+{
+  "name": "Investor & Startup Tracker",
+  "description": "A comprehensive, single-page application for investors to track their portfolio of startups and view detailed health metrics for each company.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
