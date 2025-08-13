@@ -667,6 +667,7 @@ const App: React.FC = () => {
           <StartupHealthView 
             startup={userStartup}
             userRole={currentUser?.role}
+            user={currentUser}
             onBack={() => {}} // No back button needed for startup users
             onActivateFundraising={handleActivateFundraising}
             onInvestorAdded={handleInvestorAdded}
@@ -695,6 +696,7 @@ const App: React.FC = () => {
         <StartupHealthView 
           startup={selectedStartup}
           userRole={currentUser?.role}
+          user={currentUser}
           onBack={handleBackToPortfolio}
           onActivateFundraising={handleActivateFundraising}
           onInvestorAdded={handleInvestorAdded}

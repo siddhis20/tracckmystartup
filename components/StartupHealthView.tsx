@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Startup, FundraisingDetails, InvestmentRecord, UserRole, Founder } from '../types';
+import { AuthUser } from '../lib/auth';
 import Button from './ui/Button';
 import Card from './ui/Card';
 import { ArrowLeft, LayoutDashboard, User, ShieldCheck, Banknote, Users, TableProperties, Building2 } from 'lucide-react';
@@ -15,6 +16,7 @@ import CapTableTab from './startup-health/CapTableTab';
 interface StartupHealthViewProps {
   startup: Startup;
   userRole?: UserRole;
+  user?: AuthUser;
   onBack: () => void;
   onActivateFundraising: (details: FundraisingDetails, startup: Startup) => void;
   onInvestorAdded: (investment: InvestmentRecord, startup: Startup) => void;
@@ -23,7 +25,7 @@ interface StartupHealthViewProps {
 
 type TabId = 'dashboard' | 'profile' | 'compliance' | 'financials' | 'employees' | 'capTable';
 
-const StartupHealthView: React.FC<StartupHealthViewProps> = ({ startup, userRole, onBack, onActivateFundraising, onInvestorAdded, onUpdateFounders }) => {
+const StartupHealthView: React.FC<StartupHealthViewProps> = ({ startup, userRole, user, onBack, onActivateFundraising, onInvestorAdded, onUpdateFounders }) => {
     const [activeTab, setActiveTab] = useState<TabId>('dashboard');
 
     const tabs: { id: TabId; name: string; icon: React.ReactNode }[] = [
@@ -51,6 +53,7 @@ const StartupHealthView: React.FC<StartupHealthViewProps> = ({ startup, userRole
                 return <CapTableTab 
                             startup={startup}
                             userRole={userRole}
+                            user={user}
                             onActivateFundraising={onActivateFundraising}
                             onInvestorAdded={onInvestorAdded}
                             onUpdateFounders={onUpdateFounders}
