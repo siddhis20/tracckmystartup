@@ -88,13 +88,37 @@ export interface ProfileData {
 
 export interface FinancialRecord {
     id: string;
+    startup_id: number;
+    record_type: 'expense' | 'revenue';
     date: string;
     entity: string;
     description: string;
     vertical: string;
     amount: number;
-    fundingSource?: string; // For expenses
+    funding_source?: string; // For expenses
     cogs?: number; // For revenue
+    attachment_url?: string;
+}
+
+// Add missing interfaces for FinancialsTab
+export interface Expense {
+    id: string;
+    date: string;
+    entity: string;
+    description: string;
+    vertical: string;
+    amount: number;
+    fundingSource: string;
+    attachmentUrl?: string;
+}
+
+export interface Revenue {
+    id: string;
+    date: string;
+    entity: string;
+    vertical: string;
+    earnings: number;
+    cogs: number;
     attachmentUrl?: string;
 }
 
