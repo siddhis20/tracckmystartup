@@ -10,6 +10,38 @@ ALTER TABLE IF EXISTS valuation_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS equity_holdings ENABLE ROW LEVEL SECURITY;
 
 -- =====================================================
+-- 0.a TOTAL SHARES TABLE
+-- =====================================================
+
+CREATE TABLE IF NOT EXISTS startup_shares (
+    startup_id INTEGER PRIMARY KEY REFERENCES startups(id) ON DELETE CASCADE,
+    total_shares NUMERIC NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+ALTER TABLE IF EXISTS startup_shares ENABLE ROW LEVEL SECURITY;
+
+-- Add price_per_share column if missing
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema = 'public' AND table_name = 'startup_shares' AND column_name = 'price_per_share'
+  ) THEN
+    ALTER TABLE public.startup_shares ADD COLUMN price_per_share NUMERIC NOT NULL DEFAULT 0;
+  END IF;
+END $$;
+
+-- Add ESOP reserved shares column to store company-level ESOP pool shares
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema = 'public' AND table_name = 'startup_shares' AND column_name = 'esop_reserved_shares'
+  ) THEN
+    ALTER TABLE public.startup_shares ADD COLUMN esop_reserved_shares NUMERIC NOT NULL DEFAULT 0;
+  END IF;
+END $$;
+
+-- =====================================================
 -- 1. INVESTMENT RECORDS TABLE
 -- =====================================================
 
@@ -23,7 +55,8 @@ CREATE TABLE IF NOT EXISTS investment_records (
     investor_code TEXT,
     amount DECIMAL(15,2) NOT NULL,
     equity_allocated DECIMAL(5,2) NOT NULL, -- Percentage
-    pre_money_valuation DECIMAL(15,2) NOT NULL,
+    pre_money_valuation DECIMAL(15,2),
+    post_money_valuation DECIMAL(15,2),
     proof_url TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()

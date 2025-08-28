@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
-import { Subsidiary, InternationalOp, ProfileData } from '../types';
+import { COUNTRIES } from '../constants';
+import { Subsidiary, InternationalOp, ProfileData, ServiceProvider } from '../types';
 
 // =====================================================
 // PROFILE SERVICE FOR DYNAMIC PROFILE SECTION
@@ -75,6 +76,8 @@ export const profileService = {
         country: sub.country,
         companyType: sub.companyType ?? sub.company_type,
         registrationDate: normalizeDate(sub.registrationDate ?? sub.registration_date),
+        caCode: sub.caCode ?? sub.ca_service_code ?? undefined,
+        csCode: sub.csCode ?? sub.cs_service_code ?? undefined,
       }));
 
       const normalizedInternationalOps: InternationalOp[] = (data.international_ops || []).map((op: any) => ({
@@ -107,14 +110,15 @@ export const profileService = {
       console.log('🔍 updateStartupProfile called with:', { startupId, profileData });
       
       // Try the simple function first, then fall back to the full function
+      // Ensure we write CA/CS service codes
       let { data, error } = await supabase
         .rpc('update_startup_profile_simple', {
           startup_id_param: startupId,
           country_param: profileData.country || '',
           company_type_param: profileData.companyType || '',
           registration_date_param: profileData.registrationDate || null,
-          ca_service_code_param: profileData.caServiceCode || null,
-          cs_service_code_param: profileData.csServiceCode || null
+          ca_service_code_param: (profileData.caServiceCode || (profileData as any).caCode) || null,
+          cs_service_code_param: (profileData.csServiceCode || (profileData as any).csCode) || null
         });
 
       console.log('🔍 Simple function result:', { data, error });
@@ -128,18 +132,42 @@ export const profileService = {
             country_param: profileData.country || '',
             company_type_param: profileData.companyType || '',
             registration_date_param: profileData.registrationDate || null,
-            ca_service_code_param: profileData.caServiceCode || null,
-            cs_service_code_param: profileData.csServiceCode || null
+            ca_service_code_param: (profileData.caServiceCode || (profileData as any).caCode) || null,
+            cs_service_code_param: (profileData.csServiceCode || (profileData as any).csCode) || null
           });
         
         console.log('🔍 Full function result:', { data: fullData, error: fullError });
         
         if (fullError) throw fullError;
         data = fullData;
+      } else {
+        // Treat success (even if data is false/no-op) as success
+        return true;
+      }
+
+      // As a final safety, if RPC path failed to update (data is falsy), attempt direct update
+      if (!data) {
+        const { error: directError } = await supabase
+          .from('startups')
+          .update({
+            country_of_registration: profileData.country || null,
+            company_type: profileData.companyType || null,
+            registration_date: profileData.registrationDate || null,
+            ca_service_code: (profileData.caServiceCode || (profileData as any).caCode) || null,
+            cs_service_code: (profileData.csServiceCode || (profileData as any).csCode) || null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', startupId);
+        if (directError) {
+          console.error('❌ Direct update on startups failed due to RLS/policy:', directError);
+          return false;
+        }
+        console.log('🔍 Direct update on startups succeeded');
+        return true;
       }
 
       console.log('🔍 Final update result:', data);
-      return data;
+      return true;
     } catch (error) {
       console.error('❌ Error updating startup profile:', error);
       return false;
@@ -203,7 +231,7 @@ export const profileService = {
       console.log('🔍 updateSubsidiary called with:', { subsidiaryId, subsidiary });
       
       // Ensure registration date is in the correct format
-      let registrationDate = subsidiary.registrationDate;
+      let registrationDate: string | null = (subsidiary.registrationDate as unknown as string) || null;
       if (registrationDate && typeof registrationDate === 'string') {
         // Handle different date formats
         const date = new Date(registrationDate);
@@ -214,8 +242,8 @@ export const profileService = {
           console.error('❌ Invalid date format:', registrationDate);
           return false;
         }
-      } else if (registrationDate instanceof Date) {
-        registrationDate = registrationDate.toISOString().split('T')[0];
+      } else if (registrationDate && typeof registrationDate === 'object' && 'toISOString' in (registrationDate as any)) {
+        registrationDate = ((registrationDate as unknown) as Date).toISOString().split('T')[0];
       }
       
       console.log('🔍 Processed registration date:', registrationDate);
@@ -305,7 +333,7 @@ export const profileService = {
       console.log('🔍 updateInternationalOp called with:', { opId, operation });
       
       // Ensure start date is in the correct format
-      let startDate = operation.startDate;
+      let startDate: string | null = (operation.startDate as unknown as string) || null;
       if (startDate && typeof startDate === 'string') {
         // Handle different date formats
         const date = new Date(startDate);
@@ -316,8 +344,8 @@ export const profileService = {
           console.error('❌ Invalid date format:', startDate);
           return false;
         }
-      } else if (startDate instanceof Date) {
-        startDate = startDate.toISOString().split('T')[0];
+      } else if (startDate && typeof startDate === 'object' && 'toISOString' in (startDate as any)) {
+        startDate = ((startDate as unknown) as Date).toISOString().split('T')[0];
       }
       
       console.log('🔍 Processed start date:', startDate);
@@ -527,9 +555,17 @@ export const profileService = {
 
   // Get company types by country
   getCompanyTypesByCountry(country: string, sector?: string): string[] {
+    // Normalize common aliases to align with compliance rules
+    const aliasToCanonical: Record<string, string> = {
+      'USA': 'United States',
+      'US': 'United States',
+      'UK': 'United Kingdom'
+    };
+    const normalized = aliasToCanonical[country] || country;
+
     const companyTypes: { [key: string]: string[] } = {
-      'USA': ['C-Corporation', 'LLC', 'S-Corporation'],
-      'UK': ['Limited Company (Ltd)', 'Public Limited Company (PLC)'],
+      'United States': ['C-Corporation', 'LLC', 'S-Corporation'],
+      'United Kingdom': ['Limited Company (Ltd)', 'Public Limited Company (PLC)'],
       'India': ['Private Limited Company', 'Public Limited Company', 'LLP'],
       'Singapore': ['Private Limited', 'Exempt Private Company'],
       'Germany': ['GmbH', 'AG', 'UG'],
@@ -537,18 +573,15 @@ export const profileService = {
       'Australia': ['Proprietary Limited', 'Public Company'],
       'Japan': ['Kabushiki Kaisha', 'Godo Kaisha'],
       'Brazil': ['Ltda', 'S.A.'],
-      'Mexico': ['S.A. de C.V.', 'S. de R.L.']
+      'France': ['SARL', 'SA', 'SAS']
     };
 
-    return companyTypes[country] || ['LLC'];
+    return companyTypes[normalized] || ['LLC'];
   },
 
   // Get all available countries
   getAllCountries(): string[] {
-    return [
-      'USA', 'UK', 'India', 'Singapore', 'Germany', 
-      'Canada', 'Australia', 'Japan', 'Brazil', 'Mexico'
-    ];
+    return COUNTRIES;
   },
 
   // Validate profile data
@@ -573,9 +606,306 @@ export const profileService = {
       }
     }
 
+    // Cross-entity date consistency checks
+    const parentDate = profile.registrationDate ? new Date(profile.registrationDate) : null;
+    const isValidDate = (d: any) => d instanceof Date && !isNaN(d.getTime());
+
+    // Validate subsidiaries
+    if (Array.isArray(profile.subsidiaries)) {
+      for (const sub of profile.subsidiaries) {
+        if (sub.country && !this.getAllCountries().includes(sub.country)) {
+          errors.push(`Invalid subsidiary country: ${sub.country}`);
+        }
+        if (sub.companyType && sub.country) {
+          const valid = this.getCompanyTypesByCountry(sub.country);
+          if (!valid.includes(sub.companyType)) {
+            errors.push(`Invalid company type for subsidiary country ${sub.country}`);
+          }
+        }
+        if (sub.registrationDate) {
+          const subDate = new Date(sub.registrationDate);
+          if (isNaN(subDate.getTime())) {
+            errors.push('Invalid subsidiary registration date');
+          }
+          if (parentDate && isValidDate(parentDate) && isValidDate(subDate) && subDate < (parentDate as Date)) {
+            errors.push('Subsidiary registration date cannot be earlier than parent registration date');
+          }
+        }
+      }
+    }
+
+    // Validate international operations
+    if (Array.isArray(profile.internationalOps)) {
+      for (const op of profile.internationalOps) {
+        if (op.country && !this.getAllCountries().includes(op.country)) {
+          errors.push(`Invalid international operation country: ${op.country}`);
+        }
+        if (op.startDate) {
+          const opDate = new Date(op.startDate);
+          if (isNaN(opDate.getTime())) {
+            errors.push('Invalid international operation start date');
+          }
+          if (parentDate && isValidDate(parentDate) && isValidDate(opDate) && opDate < (parentDate as Date)) {
+            errors.push('International operation start date cannot be earlier than parent registration date');
+          }
+        }
+      }
+    }
+
     return {
       isValid: errors.length === 0,
       errors
     };
+  },
+
+  // Validate CA/CS codes against backend
+  async validateServiceCodes(profile: Partial<ProfileData>): Promise<{ isValid: boolean; errors: string[] }> {
+    const errors: string[] = [];
+
+    // Validate main startup CA/CS codes
+    if (profile.caServiceCode && profile.caServiceCode.trim()) {
+      const caProvider = await this.getServiceProvider(profile.caServiceCode.trim(), 'ca');
+      if (!caProvider) {
+        errors.push(`Invalid CA code: ${profile.caServiceCode}. Please enter a valid CA service provider code.`);
+      }
+    }
+
+    if (profile.csServiceCode && profile.csServiceCode.trim()) {
+      const csProvider = await this.getServiceProvider(profile.csServiceCode.trim(), 'cs');
+      if (!csProvider) {
+        errors.push(`Invalid CS code: ${profile.csServiceCode}. Please enter a valid CS service provider code.`);
+      }
+    }
+
+    // Validate subsidiary CA/CS codes
+    if (Array.isArray(profile.subsidiaries)) {
+      for (let i = 0; i < profile.subsidiaries.length; i++) {
+        const sub = profile.subsidiaries[i];
+        const subIndex = i + 1;
+
+        if (sub.caCode && sub.caCode.trim()) {
+          const caProvider = await this.getServiceProvider(sub.caCode.trim(), 'ca');
+          if (!caProvider) {
+            errors.push(`Subsidiary ${subIndex}: Invalid CA code "${sub.caCode}". Please enter a valid CA service provider code.`);
+          }
+        }
+
+        if (sub.csCode && sub.csCode.trim()) {
+          const csProvider = await this.getServiceProvider(sub.csCode.trim(), 'cs');
+          if (!csProvider) {
+            errors.push(`Subsidiary ${subIndex}: Invalid CS code "${sub.csCode}". Please enter a valid CS service provider code.`);
+          }
+        }
+      }
+    }
+
+    return {
+      isValid: errors.length === 0,
+      errors
+    };
+  },
+
+  // =====================================================
+  // SERVICE PROVIDER OPERATIONS
+  // =====================================================
+
+  // Get service provider by code
+  async getServiceProvider(code: string, type: 'ca' | 'cs'): Promise<ServiceProvider | null> {
+    try {
+      const { data, error } = await supabase
+        .from('service_providers')
+        .select('*')
+        .eq('code', code)
+        .eq('type', type)
+        .maybeSingle();
+
+      if (error) {
+        console.error('Error fetching service provider:', error);
+        return null;
+      }
+
+      return data ? {
+        name: data.name,
+        code: data.code,
+        licenseUrl: data.license_url
+      } : null;
+    } catch (error) {
+      console.error('Error fetching service provider:', error);
+      return null;
+    }
+  },
+
+  // Update subsidiary service provider
+  async updateSubsidiaryServiceProvider(
+    subsidiaryId: number,
+    type: 'ca' | 'cs',
+    serviceCode: string
+  ): Promise<boolean> {
+    try {
+      const updateData = type === 'ca' 
+        ? { ca_service_code: serviceCode }
+        : { cs_service_code: serviceCode };
+
+      const { data, error } = await supabase
+        .from('subsidiaries')
+        .update(updateData)
+        .eq('id', subsidiaryId)
+        .select('id, ca_service_code, cs_service_code')
+        .single();
+
+      if (error) throw error;
+      return true;
+    } catch (error) {
+      console.error('Error updating subsidiary service provider:', error);
+      return false;
+    }
+  },
+
+  // Remove subsidiary service provider
+  async removeSubsidiaryServiceProvider(
+    subsidiaryId: number,
+    type: 'ca' | 'cs'
+  ): Promise<boolean> {
+    try {
+      const updateData = type === 'ca' 
+        ? { ca_service_code: null }
+        : { cs_service_code: null };
+
+      const { data, error } = await supabase
+        .from('subsidiaries')
+        .update(updateData)
+        .eq('id', subsidiaryId);
+
+      if (error) throw error;
+      return true;
+    } catch (error) {
+      console.error('Error removing subsidiary service provider:', error);
+      return false;
+    }
+  },
+
+  // =====================================================
+  // COMPLIANCE TASK GENERATION
+  // =====================================================
+
+  // Generate compliance tasks for a startup
+  async generateComplianceTasks(startupId: number): Promise<any[]> {
+    try {
+      console.log('🔍 Generating compliance tasks for startup:', startupId);
+      
+      const { data, error } = await supabase
+        .rpc('generate_compliance_tasks_for_startup', {
+          startup_id_param: startupId
+        });
+      
+      if (error) {
+        console.error('Error generating compliance tasks:', error);
+        throw error;
+      }
+      
+      console.log('🔍 Generated compliance tasks:', data);
+      return data || [];
+    } catch (error) {
+      console.error('Error generating compliance tasks:', error);
+      return [];
+    }
+  },
+
+  // Sync compliance tasks with database
+  async syncComplianceTasks(startupId: number): Promise<boolean> {
+    try {
+      console.log('🔍 Syncing compliance tasks for startup:', startupId);
+      
+      const tasks = await this.generateComplianceTasks(startupId);
+      
+      // Clear existing tasks for this startup
+      const { error: deleteError } = await supabase
+        .from('compliance_checks')
+        .delete()
+        .eq('startup_id', startupId);
+      
+      if (deleteError) {
+        console.error('Error clearing existing compliance tasks:', deleteError);
+        throw deleteError;
+      }
+      
+      // Insert new tasks
+      if (tasks.length > 0) {
+        const taskRecords = tasks.map(task => ({
+          startup_id: startupId,
+          task_id: task.task_id,
+          entity_identifier: task.entity_identifier,
+          entity_display_name: task.entity_display_name,
+          year: task.year,
+          task_name: task.task_name,
+          ca_required: task.ca_required,
+          cs_required: task.cs_required,
+          task_type: task.task_type,
+          ca_status: 'Pending',
+          cs_status: 'Pending'
+        }));
+        
+        console.log('🔍 Inserting compliance task records:', taskRecords);
+        
+        const { error: insertError } = await supabase
+          .from('compliance_checks')
+          .insert(taskRecords);
+        
+        if (insertError) {
+          console.error('Error inserting compliance tasks:', insertError);
+          throw insertError;
+        }
+      }
+      
+      console.log('🔍 Compliance tasks synced successfully');
+      return true;
+    } catch (error) {
+      console.error('Error syncing compliance tasks:', error);
+      return false;
+    }
+  },
+
+  // Get compliance tasks for a startup
+  async getComplianceTasks(startupId: number): Promise<any[]> {
+    try {
+      const { data, error } = await supabase
+        .from('compliance_checks')
+        .select('*')
+        .eq('startup_id', startupId)
+        .order('year', { ascending: false })
+        .order('task_name', { ascending: true });
+      
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      console.error('Error fetching compliance tasks:', error);
+      return [];
+    }
+  },
+
+  // Update compliance task status
+  async updateComplianceTaskStatus(
+    startupId: number,
+    taskId: string,
+    type: 'ca' | 'cs',
+    status: string
+  ): Promise<boolean> {
+    try {
+      const updateData = type === 'ca' 
+        ? { ca_status: status }
+        : { cs_status: status };
+
+      const { error } = await supabase
+        .from('compliance_checks')
+        .update(updateData)
+        .eq('startup_id', startupId)
+        .eq('task_id', taskId);
+
+      if (error) throw error;
+      return true;
+    } catch (error) {
+      console.error('Error updating compliance task status:', error);
+      return false;
+    }
   }
 };

@@ -1,16 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { Startup, Employee } from '../../types';
+import { Startup, Employee, Subsidiary } from '../../types';
 import Card from '../ui/Card';
+import SimpleModal from '../ui/SimpleModal';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import Select from '../ui/Select';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from 'recharts';
 import { Plus, Trash2, Edit3, Save, X, Download } from 'lucide-react';
 import { employeesService } from '../../lib/employeesService';
+import { storageService } from '../../lib/storage';
+import { profileService } from '../../lib/profileService';
+import { capTableService } from '../../lib/capTableService';
 
 interface EmployeesTabProps {
   startup: Startup;
   userRole?: string;
+  isViewOnly?: boolean;
 }
 
 const formatCurrency = (value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact' }).format(value);
@@ -23,12 +28,8 @@ const generateMonthlyExpenseData = async (startup: Startup) => {
     console.log('✅ Monthly data loaded:', monthlyData);
     
     if (monthlyData.length === 0) {
-      console.log('⚠️ No monthly data found, using fallback');
-      return [
-        { name: 'Jan', salary: 0, esop: 0 },
-        { name: 'Feb', salary: 0, esop: 0 },
-        { name: 'Mar', salary: 0, esop: 0 }
-      ];
+      console.log('⚠️ No monthly data found, returning empty set');
+      return [];
     }
     
     return monthlyData.map(item => ({
@@ -38,15 +39,7 @@ const generateMonthlyExpenseData = async (startup: Startup) => {
     }));
   } catch (error) {
     console.error('❌ Error loading monthly data:', error);
-    console.log('🔄 Using fallback monthly data');
-    // Fallback to mock data if database fails
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'];
-    const baseSalary = Math.floor((startup.totalFunding || 1000000) * 0.0001);
-    return months.map((month, index) => ({
-      name: month,
-      salary: baseSalary * (0.8 + Math.random() * 0.4),
-      esop: baseSalary * 0.125
-    }));
+    return [];
   }
 };
 
@@ -57,11 +50,8 @@ const generateDepartmentData = async (startup: Startup) => {
     console.log('✅ Department data loaded:', deptData);
     
     if (deptData.length === 0) {
-      console.log('⚠️ No department data found, using fallback');
-      return [
-        { name: 'Engineering', value: 1 },
-        { name: 'Sales', value: 1 }
-      ];
+      console.log('⚠️ No department data found, returning empty set');
+      return [];
     }
     
     return deptData.map(item => ({
@@ -70,29 +60,7 @@ const generateDepartmentData = async (startup: Startup) => {
     }));
   } catch (error) {
     console.error('❌ Error loading department data:', error);
-    console.log('🔄 Using fallback department data');
-    // Fallback to mock data if database fails
-    const totalFunding = startup.totalFunding || 1000000;
-    const employeeCount = Math.floor(totalFunding / 100000);
-    
-    if (employeeCount < 5) {
-      return [
-        { name: 'Engineering', value: 80 },
-        { name: 'Sales', value: 20 }
-      ];
-    } else if (employeeCount < 15) {
-      return [
-        { name: 'Engineering', value: 60 },
-        { name: 'Sales', value: 25 },
-        { name: 'Ops', value: 15 }
-      ];
-    } else {
-      return [
-        { name: 'Engineering', value: 50 },
-        { name: 'Sales', value: 30 },
-        { name: 'Ops', value: 20 }
-      ];
-    }
+    return [];
   }
 };
 
@@ -103,53 +71,13 @@ const generateMockEmployees = async (startup: Startup): Promise<Employee[]> => {
     return employees;
   } catch (error) {
     console.error('Error loading employees:', error);
-    // Fallback to mock data if database fails
-    const totalFunding = startup.totalFunding || 1000000;
-    const employeeCount = Math.min(Math.floor(totalFunding / 100000), 10);
-    
-    if (employeeCount < 3) {
-      return [
-        {
-          id: 'emp1',
-          name: 'John Doe',
-          department: 'Engineering',
-          salary: Math.floor(totalFunding * 0.00012),
-          esopAllocation: Math.floor(totalFunding * 0.00005),
-          allocationType: 'one-time',
-          esopPerAllocation: Math.floor(totalFunding * 0.000025),
-          contractUrl: '#'
-        }
-      ];
-    } else {
-      return [
-        {
-          id: 'emp1',
-          name: 'John Doe',
-          department: 'Engineering',
-          salary: Math.floor(totalFunding * 0.00012),
-          esopAllocation: Math.floor(totalFunding * 0.00005),
-          allocationType: 'one-time',
-          esopPerAllocation: Math.floor(totalFunding * 0.000025),
-          contractUrl: '#'
-        },
-        {
-          id: 'emp2',
-          name: 'Jane Smith',
-          department: 'Sales',
-          salary: Math.floor(totalFunding * 0.00009),
-          esopAllocation: Math.floor(totalFunding * 0.000035),
-          allocationType: 'one-time',
-          esopPerAllocation: Math.floor(totalFunding * 0.000035),
-          contractUrl: '#'
-        }
-      ];
-    }
+    return [];
   }
 };
 
 const COLORS = ['#1e40af', '#1d4ed8', '#3b82f6'];
 
-const EmployeesTab: React.FC<EmployeesTabProps> = ({ startup, userRole }) => {
+const EmployeesTab: React.FC<EmployeesTabProps> = ({ startup, userRole, isViewOnly = false }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -157,8 +85,17 @@ const EmployeesTab: React.FC<EmployeesTabProps> = ({ startup, userRole }) => {
     const [departmentData, setDepartmentData] = useState<any[]>([]);
     const [mockEmployees, setMockEmployees] = useState<Employee[]>([]);
     const [summary, setSummary] = useState<any>(null);
+    const [entities, setEntities] = useState<string[]>(['Parent Company']);
+    const [esopReservedShares, setEsopReservedShares] = useState<number>(0);
+    const [esopReservedDraft, setEsopReservedDraft] = useState<string>('0');
+    const [pricePerShare, setPricePerShare] = useState<number>(0);
+    const [totalShares, setTotalShares] = useState<number>(0);
+    const [esopAllocationDraft, setEsopAllocationDraft] = useState<string>('');
+    const [allocationTypeDraft, setAllocationTypeDraft] = useState<'one-time' | 'annually' | 'quarterly' | 'monthly'>('one-time');
+    const [esopPerAllocationDraft, setEsopPerAllocationDraft] = useState<string>('0');
+    const [isEsopModalOpen, setIsEsopModalOpen] = useState(false);
     
-    const canEdit = userRole === 'Startup';
+    const canEdit = (userRole === 'Startup' || userRole === 'Admin') && !isViewOnly;
 
     // Load data on component mount
     useEffect(() => {
@@ -171,17 +108,35 @@ const EmployeesTab: React.FC<EmployeesTabProps> = ({ startup, userRole }) => {
             setError(null);
             
             // Load all data in parallel
-            const [monthlyData, deptData, employeesData, summaryData] = await Promise.all([
+            const [monthlyData, deptData, employeesData, summaryData, profileData, pps, shares, esopShares] = await Promise.all([
                 generateMonthlyExpenseData(startup),
                 generateDepartmentData(startup),
                 generateMockEmployees(startup),
-                employeesService.getEmployeeSummary(startup.id)
+                employeesService.getEmployeeSummary(startup.id),
+                profileService.getStartupProfile(startup.id),
+                capTableService.getPricePerShare(startup.id),
+                capTableService.getTotalShares(startup.id),
+                capTableService.getEsopReservedShares(startup.id)
             ]);
             
             setMonthlyExpenseData(monthlyData);
             setDepartmentData(deptData);
             setMockEmployees(employeesData);
             setSummary(summaryData);
+            setPricePerShare(pps || 0);
+            setTotalShares(shares || 0);
+            setEsopReservedShares(esopShares || 0);
+            setEsopReservedDraft(String(esopShares || 0));
+            
+            // Populate entities from profile data
+            const entityList = ['Parent Company'];
+            if (profileData?.subsidiaries && profileData.subsidiaries.length > 0) {
+                profileData.subsidiaries.forEach((subsidiary: Subsidiary) => {
+                    const entityName = `${subsidiary.country} Subsidiary`;
+                    entityList.push(entityName);
+                });
+            }
+            setEntities(entityList);
             
         } catch (err) {
             console.error('Error loading data:', err);
@@ -196,28 +151,73 @@ const EmployeesTab: React.FC<EmployeesTabProps> = ({ startup, userRole }) => {
         const formData = new FormData(e.target as HTMLFormElement);
         
         try {
+            console.log('🔍 Starting employee creation process...');
+            
+            // Use controlled state for ESOP fields to ensure calculated values are saved
+            const esopAllocationValue = esopAllocationDraft !== '' 
+                ? parseFloat(esopAllocationDraft) 
+                : (parseFloat(formData.get('esopAllocation') as string) || 0);
+            const esopPerAllocationValue = esopPerAllocationDraft !== '' 
+                ? parseFloat(esopPerAllocationDraft) 
+                : (parseFloat(formData.get('esopPerAllocation') as string) || 0);
+
+            // Validation: allocated ESOPs must not exceed reserved ESOPs value (USD)
+            const prospectiveAllocatedTotal = (summary?.total_esop_allocated || mockEmployees.reduce((acc, emp) => acc + emp.esopAllocation, 0)) + (esopAllocationValue || 0);
+            if (reservedEsopValue > 0 && prospectiveAllocatedTotal > reservedEsopValue) {
+                setError('Total ESOP allocation would exceed the reserved ESOPs value. Reduce the allocation or increase reserved ESOPs.');
+                return;
+            }
+
             const employeeData = {
                 name: formData.get('name') as string,
                 joiningDate: formData.get('joiningDate') as string,
                 entity: formData.get('entity') as string,
                 department: formData.get('department') as string,
                 salary: parseFloat(formData.get('salary') as string),
-                esopAllocation: parseFloat(formData.get('esopAllocation') as string) || 0,
-                allocationType: formData.get('allocationType') as 'one-time' | 'annually' | 'quarterly' | 'monthly',
-                esopPerAllocation: parseFloat(formData.get('esopPerAllocation') as string) || 0,
+                esopAllocation: esopAllocationValue || 0,
+                allocationType: allocationTypeDraft,
+                esopPerAllocation: esopPerAllocationValue || 0,
                 contractUrl: ''
             };
 
-            await employeesService.addEmployee(startup.id, employeeData);
+            console.log('📝 Employee data to create:', employeeData);
+            console.log('🏢 Startup ID:', startup.id);
+
+            // Create the employee first
+            console.log('🔄 Creating employee in database...');
+            const created = await employeesService.addEmployee(startup.id, employeeData);
+            console.log('✅ Employee created:', created);
+
+            // If a contract file was provided, upload and update the record
+            const contractInput = (e.target as HTMLFormElement).elements.namedItem('contract') as HTMLInputElement | null;
+            const file = contractInput?.files && contractInput.files[0] ? contractInput.files[0] : null;
             
+            if (file && created?.id) {
+                console.log('📁 Contract file found, uploading...');
+                const upload = await storageService.uploadEmployeeContract(file, String(startup.id), String(created.id));
+                console.log('📤 Upload result:', upload);
+                
+                if (upload.success && upload.url) {
+                    console.log('🔄 Updating employee with contract URL...');
+                    await employeesService.updateEmployee(created.id, { contractUrl: upload.url });
+                    console.log('✅ Employee updated with contract URL');
+                }
+            }
+
             // Reload data
+            console.log('🔄 Reloading data...');
             await loadData();
+            console.log('✅ Data reloaded successfully');
             
             // Reset form
             (e.target as HTMLFormElement).reset();
+            console.log('✅ Form reset successfully');
+            setEsopAllocationDraft('');
+            setEsopPerAllocationDraft('0');
+            setAllocationTypeDraft('one-time');
             
         } catch (err) {
-            console.error('Error adding employee:', err);
+            console.error('❌ Error adding employee:', err);
             setError('Failed to add employee');
         }
     };
@@ -234,8 +234,8 @@ const EmployeesTab: React.FC<EmployeesTabProps> = ({ startup, userRole }) => {
         }
     };
 
-    const RESERVED_ESOP_PERCENTAGE = 5;
-    const reservedEsopValue = startup.currentValuation * (RESERVED_ESOP_PERCENTAGE / 100);
+    // ESOP Reserved: USD = shares * latest price/share
+    const reservedEsopValue = (esopReservedShares || 0) * (pricePerShare || 0);
     const allocatedEsopValue = summary?.total_esop_allocated || mockEmployees.reduce((acc, emp) => acc + emp.esopAllocation, 0);
 
     if (isLoading) {
@@ -267,13 +267,90 @@ const EmployeesTab: React.FC<EmployeesTabProps> = ({ startup, userRole }) => {
                 </Card>
                 <Card>
                     <p className="text-sm font-medium text-slate-500">Total Equity Reserved for ESOPs</p>
-                    <p className="text-2xl font-bold">{formatCurrency(reservedEsopValue)} ({RESERVED_ESOP_PERCENTAGE}%)</p>
+                    <div className="flex items-center gap-3">
+                        <Input 
+                            id="esop-reserved-shares"
+                            name="esop-reserved-shares"
+                            type="number"
+                            value={esopReservedDraft}
+                            onChange={(e) => setEsopReservedDraft(e.target.value)}
+                            onBlur={async () => {
+                                const parsed = Number(esopReservedDraft);
+                                if (!Number.isFinite(parsed) || parsed < 0) {
+                                    setEsopReservedDraft(String(esopReservedShares || 0));
+                                    return;
+                                }
+                                // Validation: shares must not exceed total shares
+                                if (totalShares && parsed > totalShares) {
+                                    setError('ESOP reserved shares cannot exceed total company shares');
+                                    setEsopReservedDraft(String(esopReservedShares || 0));
+                                    return;
+                                }
+                                try {
+                                    const saved = await capTableService.upsertEsopReservedShares(startup.id, parsed);
+                                    setEsopReservedShares(saved);
+                                } catch (err) {
+                                    console.error('Failed to save ESOP reserved shares', err);
+                                    setEsopReservedDraft(String(esopReservedShares || 0));
+                                }
+                            }}
+                        />
+                        <span className="text-slate-500">(shares)</span>
+                        <Button size="sm" variant="outline" onClick={() => setIsEsopModalOpen(true)}>Edit</Button>
+                    </div>
+                    <p className="text-2xl font-bold mt-1">{formatCurrency(reservedEsopValue)}</p>
                 </Card>
                 <Card>
                     <p className="text-sm font-medium text-slate-500">Total Equity Allocated as ESOPs</p>
                     <p className="text-2xl font-bold">{formatCurrency(allocatedEsopValue)} ({reservedEsopValue > 0 ? ((allocatedEsopValue / reservedEsopValue) * 100).toFixed(1) : 0}%)</p>
                 </Card>
             </div>
+
+            {/* ESOP Reserved Modal */}
+            <SimpleModal 
+                isOpen={isEsopModalOpen} 
+                title="Update ESOP Reserved Shares" 
+                onClose={() => setIsEsopModalOpen(false)}
+                footer={
+                    <>
+                        <Button type="button" variant="outline" onClick={() => setIsEsopModalOpen(false)}>Cancel</Button>
+                        <Button 
+                            type="button" 
+                            onClick={async () => {
+                                const parsed = Number(esopReservedDraft);
+                                if (!Number.isFinite(parsed) || parsed < 0) {
+                                    setError('Please enter a valid non-negative number');
+                                    return;
+                                }
+                                if (totalShares && parsed > totalShares) {
+                                    setError('ESOP reserved shares cannot exceed total company shares');
+                                    return;
+                                }
+                                try {
+                                    const saved = await capTableService.upsertEsopReservedShares(startup.id, parsed);
+                                    setEsopReservedShares(saved);
+                                    setIsEsopModalOpen(false);
+                                } catch (err) {
+                                    console.error('Failed to save ESOP reserved shares', err);
+                                }
+                            }}
+                        >
+                            Save
+                        </Button>
+                    </>
+                }
+            >
+                <div style={{ display: 'grid', gap: 8 }}>
+                    <label htmlFor="modal-esop-reserved" style={{ fontSize: 12, color: '#475569' }}>ESOP Reserved Shares</label>
+                    <input 
+                        id="modal-esop-reserved"
+                        type="number"
+                        value={esopReservedDraft}
+                        onChange={(e) => setEsopReservedDraft(e.target.value)}
+                        style={{ padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: 6 }}
+                    />
+                </div>
+            </SimpleModal>
 
             {/* Charts */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -365,19 +442,52 @@ const EmployeesTab: React.FC<EmployeesTabProps> = ({ startup, userRole }) => {
                         <Input label="Employee Name" name="name" required />
                         <Input label="Date of Joining" name="joiningDate" type="date" required />
                         <Select label="Entity" name="entity">
-                            <option value="Parent Company">Parent Company</option>
+                            {entities.map((entity, index) => (
+                                <option key={index} value={entity}>{entity}</option>
+                            ))}
                         </Select>
                         <Input label="Department" name="department" required />
                         <Input label="Salary (Annual)" name="salary" type="number" min="0" required />
-                        <Input label="ESOP Allocation (USD)" name="esopAllocation" type="number" min="0" />
-                        <Select label="Allocation Type" name="allocationType">
+                        <Input 
+                            label="ESOP Allocation (USD)" 
+                            name="esopAllocation" 
+                            type="number" 
+                            min="0" 
+                            value={esopAllocationDraft}
+                            onChange={(e) => {
+                                const val = e.target.value;
+                                setEsopAllocationDraft(val);
+                                const amount = parseFloat(val) || 0;
+                                const periods = allocationTypeDraft === 'monthly' ? 12 : allocationTypeDraft === 'quarterly' ? 4 : 1;
+                                setEsopPerAllocationDraft(String(amount / periods));
+                            }}
+                        />
+                        <Select 
+                            label="Allocation Type" 
+                            name="allocationType"
+                            value={allocationTypeDraft}
+                            onChange={(e) => {
+                                const type = e.target.value as 'one-time' | 'annually' | 'quarterly' | 'monthly';
+                                setAllocationTypeDraft(type);
+                                const amount = parseFloat(esopAllocationDraft) || 0;
+                                const periods = type === 'monthly' ? 12 : type === 'quarterly' ? 4 : 1;
+                                setEsopPerAllocationDraft(String(amount / periods));
+                            }}
+                        >
                             <option value="one-time">One-time</option>
                             <option value="annually">Annually</option>
                             <option value="quarterly">Quarterly</option>
                             <option value="monthly">Monthly</option>
                         </Select>
-                        <Input label="ESOP per Allocation" name="esopPerAllocation" type="number" min="0" />
-                        <Input label="Employee Contract" name="contract" type="file" accept=".pdf,.doc,.docx" />
+                        <Input 
+                            label="ESOP per Allocation" 
+                            name="esopPerAllocation" 
+                            type="number" 
+                            min="0"
+                            value={esopPerAllocationDraft}
+                            readOnly
+                        />
+                        <Input id="employee-contract" label="Employee Contract" name="contract" type="file" accept=".pdf,.doc,.docx" />
                         <div className="flex items-end pt-5">
                             <Button type="submit">Add Employee</Button>
                         </div>

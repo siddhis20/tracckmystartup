@@ -153,9 +153,25 @@ class EmployeesService {
   // =====================================================
 
   async getEmployeeSummary(startupId: number): Promise<EmployeeSummary> {
-    // Temporarily use only manual calculation until RPC functions are fixed
-    console.log('🔍 Using manual calculation for employee summary (startup_id:', startupId, ')');
-    return this.calculateEmployeeSummaryManually(startupId);
+    try {
+      const { data, error } = await supabase.rpc('get_employee_summary', { startup_id_param: startupId });
+      if (error) throw error;
+      if (data && Array.isArray(data) && data[0]) {
+        const row = data[0];
+        return {
+          total_employees: row.total_employees ?? 0,
+          total_salary_expense: row.total_salary_expense ?? 0,
+          total_esop_allocated: row.total_esop_allocated ?? 0,
+          avg_salary: row.avg_salary ?? 0,
+          avg_esop_allocation: row.avg_esop_allocation ?? 0,
+        };
+      }
+      // Fallback to manual if no data returned
+      return this.calculateEmployeeSummaryManually(startupId);
+    } catch (rpcError) {
+      console.warn('RPC get_employee_summary failed, falling back to manual calc:', rpcError);
+      return this.calculateEmployeeSummaryManually(startupId);
+    }
   }
 
   async getEmployeesByDepartment(startupId: number): Promise<DepartmentData[]> {

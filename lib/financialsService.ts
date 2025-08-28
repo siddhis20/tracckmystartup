@@ -25,8 +25,7 @@ export interface FinancialSummary {
 
 export interface FinancialFilters {
   entity?: string;
-  vertical?: string;
-  year?: number;
+  year?: number | 'all';
   record_type?: 'expense' | 'revenue';
 }
 
@@ -70,12 +69,35 @@ class FinancialsService {
   }
 
   async deleteFinancialRecord(id: string): Promise<void> {
-    const { error } = await supabase
-      .from('financial_records')
-      .delete()
-      .eq('id', id);
+    try {
+      // First, get the record to check if it has an attachment
+      const record = await this.getFinancialRecord(id);
+      
+      if (record && record.attachment_url) {
+        // Extract the file path from the URL
+        const urlParts = record.attachment_url.split('/');
+        const fileName = urlParts[urlParts.length - 1];
+        const startupId = record.startup_id.toString();
+        const filePath = `${startupId}/${fileName}`;
+        
+        // Delete the file from storage
+        const { storageService } = await import('./storage');
+        await storageService.deleteFile('financial-documents', filePath);
+        console.log('🗑️ Deleted attachment file:', filePath);
+      }
+      
+      // Delete the database record
+      const { error } = await supabase
+        .from('financial_records')
+        .delete()
+        .eq('id', id);
 
-    if (error) throw error;
+      if (error) throw error;
+      console.log('🗑️ Deleted financial record:', id);
+    } catch (error) {
+      console.error('Error deleting financial record:', error);
+      throw error;
+    }
   }
 
   async getFinancialRecord(id: string): Promise<FinancialRecord | null> {
@@ -104,11 +126,7 @@ class FinancialsService {
       query = query.eq('entity', filters.entity);
     }
 
-    if (filters?.vertical && filters.vertical !== 'all') {
-      query = query.eq('vertical', filters.vertical);
-    }
-
-    if (filters?.year) {
+    if (filters?.year && filters.year !== 'all') {
       query = query.gte('date', `${filters.year}-01-01`)
                    .lt('date', `${filters.year + 1}-01-01`);
     }
@@ -368,7 +386,7 @@ class FinancialsService {
     return [...new Set(data?.map(item => item.vertical) || [])];
   }
 
-  async getAvailableYears(startupId: number): Promise<number[]> {
+  async getAvailableYears(startupId: number): Promise<(number | 'all')[]> {
     const { data, error } = await supabase
       .from('financial_records')
       .select('date')
@@ -381,10 +399,11 @@ class FinancialsService {
     
     // If no years found, return current year
     if (uniqueYears.length === 0) {
-      return [new Date().getFullYear()];
+      return ['all', new Date().getFullYear()];
     }
     
-    return uniqueYears;
+    // Return 'all' as first option, followed by actual years
+    return ['all', ...uniqueYears];
   }
 
   // =====================================================

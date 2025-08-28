@@ -1,5 +1,6 @@
 import { supabase } from './supabase'
 import { UserRole, Founder } from '../types'
+import { generateInvestorCode } from './utils'
 
 export interface AuthUser {
   id: string
@@ -7,7 +8,23 @@ export interface AuthUser {
   name: string
   role: UserRole
   startup_name?: string
+  investor_code?: string
+  ca_code?: string
+  cs_code?: string
   registration_date: string
+  // Profile fields
+  phone?: string
+  address?: string
+  city?: string
+  state?: string
+  country?: string
+  company?: string
+  // Verification documents from registration
+  government_id?: string
+  ca_license?: string
+  verification_documents?: string[]
+  profile_photo_url?: string
+  is_profile_complete?: boolean // Added for profile completion status
 }
 
 export interface SignUpData {
@@ -21,6 +38,10 @@ export interface SignUpData {
 export interface SignInData {
   email: string
   password: string
+}
+
+export interface PasswordResetData {
+  email: string
 }
 
 // Authentication service
@@ -42,6 +63,72 @@ export const authService = {
     } catch (error) {
       console.error('Auth test error:', error);
       return { success: false, error: 'Auth connection failed' };
+    }
+  },
+
+  // Send password reset email
+  async sendPasswordResetEmail(email: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      console.log('Sending password reset email to:', email);
+      
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/reset-password`
+      });
+
+      if (error) {
+        console.error('Password reset error:', error);
+        return { success: false, error: error.message };
+      }
+
+      console.log('Password reset email sent successfully');
+      return { success: true };
+    } catch (error) {
+      console.error('Password reset error:', error);
+      return { success: false, error: 'Failed to send password reset email. Please try again.' };
+    }
+  },
+
+  // Reset password with new password (for use after clicking reset link)
+  async resetPassword(newPassword: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      console.log('Resetting password...');
+      
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword
+      });
+
+      if (error) {
+        console.error('Password update error:', error);
+        return { success: false, error: error.message };
+      }
+
+      console.log('Password updated successfully');
+      return { success: true };
+    } catch (error) {
+      console.error('Password update error:', error);
+      return { success: false, error: 'Failed to update password. Please try again.' };
+    }
+  },
+
+  // Check if user profile is complete (has verification documents)
+  async isProfileComplete(userId: string): Promise<boolean> {
+    try {
+      const { data: profile, error } = await supabase
+        .from('users')
+        .select('government_id, ca_license, verification_documents')
+        .eq('id', userId)
+        .single();
+
+      if (error || !profile) {
+        return false;
+      }
+
+      // Profile is complete if user has uploaded verification documents
+      return !!(profile.government_id || profile.ca_license || 
+                (profile.verification_documents && profile.verification_documents.length > 0));
+    } catch (error) {
+      console.error('Error checking profile completion:', error);
+      return false;
     }
   },
 
@@ -81,13 +168,32 @@ export const authService = {
       console.log('Profile keys:', Object.keys(profile));
       console.log('Profile startup_name type:', typeof profile.startup_name);
 
+      // Check if profile is complete
+      const isComplete = await this.isProfileComplete(user.id);
+      console.log('Profile completion status:', isComplete);
+
       return {
         id: profile.id,
         email: profile.email,
         name: profile.name,
         role: profile.role,
         startup_name: profile.startup_name,
-        registration_date: profile.registration_date
+        investor_code: profile.investor_code,
+        ca_code: profile.ca_code,
+        cs_code: profile.cs_code,
+        registration_date: profile.registration_date,
+        phone: profile.phone,
+        address: profile.address,
+        city: profile.city,
+        state: profile.state,
+        country: profile.country,
+        company: profile.company,
+        government_id: profile.government_id,
+        ca_license: profile.ca_license,
+        cs_license: profile.cs_license,
+        verification_documents: profile.verification_documents,
+        profile_photo_url: profile.profile_photo_url,
+        is_profile_complete: isComplete
       }
     } catch (error) {
       console.error('Error getting current user:', error)
@@ -132,15 +238,22 @@ export const authService = {
       console.log('Auth user created successfully, session:', !!authData.session);
       console.log('=== SIGNUP END ===');
 
-      // If confirmation is required, session will be null
-      if (!authData.session) {
-        console.log('Email confirmation required');
-        return { user: null, error: null, confirmationRequired: true }
+      // Check if email confirmation is required
+      if (authData.user && !authData.user.email_confirmed_at) {
+        console.log('Email confirmation required, user not fully authenticated');
+        return { 
+          user: null, 
+          error: null, 
+          confirmationRequired: true 
+        };
       }
 
-      // If session exists (email confirmation not required), create profile now
-      if (authData.user) {
+      // Create user profile only after email confirmation
+      if (authData.user && authData.user.email_confirmed_at) {
         console.log('Creating user profile in database...');
+        // Generate investor code if user is an investor
+        const investorCode = data.role === 'Investor' ? generateInvestorCode() : null;
+        
         const { data: profile, error: profileError } = await supabase
           .from('users')
           .insert({
@@ -149,7 +262,26 @@ export const authService = {
             name: data.name,
             role: data.role,
             startup_name: data.role === 'Startup' ? data.startupName : null,
-            registration_date: new Date().toISOString().split('T')[0]
+            investor_code: investorCode,
+            ca_code: null, // CA code will be auto-generated by trigger
+            registration_date: new Date().toISOString().split('T')[0],
+            // Add verification document URLs
+            government_id: data.fileUrls?.governmentId || null,
+            ca_license: data.fileUrls?.roleSpecific || null,
+            verification_documents: (() => {
+              const docs = [];
+              if (data.fileUrls?.governmentId) docs.push(data.fileUrls.governmentId);
+              if (data.fileUrls?.roleSpecific) docs.push(data.fileUrls.roleSpecific);
+              return docs.length > 0 ? docs : null;
+            })(),
+            // Add profile fields (will be filled later by user)
+            phone: null,
+            address: null,
+            city: null,
+            state: null,
+            country: null,
+            company: null,
+            profile_photo_url: null
           })
           .select()
           .single()
@@ -222,13 +354,30 @@ export const authService = {
             email: profile.email,
             name: profile.name,
             role: profile.role,
-            registration_date: profile.registration_date
+            startup_name: profile.startup_name,
+            investor_code: profile.investor_code,
+            ca_code: profile.ca_code,
+            cs_code: profile.cs_code,
+            registration_date: profile.registration_date,
+            // Include new profile fields
+            phone: profile.phone,
+            address: profile.address,
+            city: profile.city,
+            state: profile.state,
+            country: profile.country,
+            company: profile.company,
+            // Include verification document fields
+            government_id: profile.government_id,
+            ca_license: profile.ca_license,
+            verification_documents: profile.verification_documents,
+            profile_photo_url: profile.profile_photo_url
           },
           error: null,
           confirmationRequired: false
         }
       }
 
+      // If we get here, email confirmation is required
       return { user: null, error: null, confirmationRequired: true }
     } catch (error) {
       console.error('Error in signUp:', error)

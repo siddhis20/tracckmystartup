@@ -80,8 +80,91 @@ class CapTableService {
       amount: record.amount,
       equityAllocated: record.equity_allocated,
       preMoneyValuation: record.pre_money_valuation,
+      postMoneyValuation: record.post_money_valuation,
       proofUrl: record.proof_url
     }));
+  }
+
+  // =====================================================
+  // TOTAL SHARES CRUD
+  // =====================================================
+
+  async getTotalShares(startupId: number): Promise<number> {
+    const { data, error } = await supabase
+      .from('startup_shares')
+      .select('total_shares')
+      .eq('startup_id', startupId)
+      .single();
+
+    if (error && error.code !== 'PGRST116') { // PGRST116: row not found
+      throw error;
+    }
+    return data?.total_shares ?? 0;
+  }
+
+  async upsertTotalShares(startupId: number, totalShares: number, pricePerShare?: number): Promise<number> {
+    if (totalShares < 0 || !Number.isFinite(totalShares)) {
+      throw new Error('Total shares must be a non-negative number');
+    }
+
+    const { data, error } = await supabase
+      .from('startup_shares')
+      .upsert({
+        startup_id: startupId,
+        total_shares: totalShares,
+        price_per_share: pricePerShare ?? null,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'startup_id' })
+      .select('total_shares')
+      .single();
+
+    if (error) throw error;
+    return data.total_shares ?? totalShares;
+  }
+
+  async getPricePerShare(startupId: number): Promise<number> {
+    const { data, error } = await supabase
+      .from('startup_shares')
+      .select('price_per_share')
+      .eq('startup_id', startupId)
+      .single();
+
+    if (error && error.code !== 'PGRST116') {
+      throw error;
+    }
+    return data?.price_per_share ?? 0;
+  }
+
+  async getEsopReservedShares(startupId: number): Promise<number> {
+    const { data, error } = await supabase
+      .from('startup_shares')
+      .select('esop_reserved_shares')
+      .eq('startup_id', startupId)
+      .single();
+
+    if (error && error.code !== 'PGRST116') {
+      throw error;
+    }
+    return data?.esop_reserved_shares ?? 0;
+  }
+
+  async upsertEsopReservedShares(startupId: number, shares: number): Promise<number> {
+    if (shares < 0 || !Number.isFinite(shares)) {
+      throw new Error('ESOP reserved shares must be a non-negative number');
+    }
+
+    const { data, error } = await supabase
+      .from('startup_shares')
+      .upsert({
+        startup_id: startupId,
+        esop_reserved_shares: shares,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'startup_id' })
+      .select('esop_reserved_shares')
+      .single();
+
+    if (error) throw error;
+    return data.esop_reserved_shares ?? shares;
   }
 
   async addInvestmentRecord(startupId: number, investmentData: Omit<InvestmentRecord, 'id'>): Promise<InvestmentRecord> {
@@ -106,9 +189,7 @@ class CapTableService {
     if (!investmentData.equityAllocated || investmentData.equityAllocated < 0) {
       throw new Error('Valid equity allocation is required');
     }
-    if (!investmentData.preMoneyValuation || investmentData.preMoneyValuation <= 0) {
-      throw new Error('Valid pre-money valuation is required');
-    }
+    // Post-money will be computed from amount & equity in UI; backend allows null and stores provided value
 
     const { data, error } = await supabase
       .from('investment_records')
@@ -122,6 +203,7 @@ class CapTableService {
         amount: investmentData.amount,
         equity_allocated: investmentData.equityAllocated,
         pre_money_valuation: investmentData.preMoneyValuation,
+        post_money_valuation: (investmentData as any).postMoneyValuation ?? null,
         proof_url: investmentData.proofUrl
       })
       .select()
@@ -142,6 +224,7 @@ class CapTableService {
       amount: data.amount,
       equityAllocated: data.equity_allocated,
       preMoneyValuation: data.pre_money_valuation,
+      postMoneyValuation: data.post_money_valuation,
       proofUrl: data.proof_url
     };
   }
@@ -157,6 +240,7 @@ class CapTableService {
     if (investmentData.amount !== undefined) updateData.amount = investmentData.amount;
     if (investmentData.equityAllocated !== undefined) updateData.equity_allocated = investmentData.equityAllocated;
     if (investmentData.preMoneyValuation !== undefined) updateData.pre_money_valuation = investmentData.preMoneyValuation;
+    if ((investmentData as any).postMoneyValuation !== undefined) (updateData as any).post_money_valuation = (investmentData as any).postMoneyValuation;
     if (investmentData.proofUrl !== undefined) updateData.proof_url = investmentData.proofUrl;
 
     const { data, error } = await supabase
@@ -178,17 +262,72 @@ class CapTableService {
       amount: data.amount,
       equityAllocated: data.equity_allocated,
       preMoneyValuation: data.pre_money_valuation,
+      postMoneyValuation: data.post_money_valuation,
       proofUrl: data.proof_url
     };
   }
 
   async deleteInvestmentRecord(id: string): Promise<void> {
-    const { error } = await supabase
-      .from('investment_records')
-      .delete()
-      .eq('id', id);
+    try {
+      console.log('🗑️ Deleting investment record with ID:', id);
+      
+      // Delete the investment record directly
+      const { error: deleteError } = await supabase
+        .from('investment_records')
+        .delete()
+        .eq('id', id);
 
-    if (error) throw error;
+      if (deleteError) {
+        console.error('❌ Error deleting investment record:', deleteError);
+        throw deleteError;
+      }
+
+      console.log('✅ Investment record deleted successfully');
+    } catch (error) {
+      console.error('❌ Error deleting investment record:', error);
+      throw error;
+    }
+  }
+
+  // Update startup funding after investment deletion
+  async updateStartupFundingAfterDeletion(startupId: number, amountToSubtract: number): Promise<void> {
+    try {
+      console.log('💰 Updating startup funding after deletion:', { startupId, amountToSubtract });
+      
+      // First get current funding
+      const { data: startup, error: fetchError } = await supabase
+        .from('startups')
+        .select('total_funding')
+        .eq('id', startupId)
+        .single();
+
+      if (fetchError) {
+        console.error('❌ Error fetching startup funding:', fetchError);
+        throw fetchError;
+      }
+
+      if (!startup) {
+        throw new Error('Startup not found');
+      }
+
+      const newFunding = Math.max(0, (startup.total_funding || 0) - amountToSubtract);
+      
+      // Update the funding
+      const { error: updateError } = await supabase
+        .from('startups')
+        .update({ total_funding: newFunding })
+        .eq('id', startupId);
+
+      if (updateError) {
+        console.error('❌ Error updating startup funding:', updateError);
+        throw updateError;
+      }
+
+      console.log('✅ Startup funding updated successfully:', { oldFunding: startup.total_funding, newFunding });
+    } catch (error) {
+      console.error('❌ Error updating startup funding:', error);
+      throw error;
+    }
   }
 
   // =====================================================
@@ -284,56 +423,73 @@ class CapTableService {
   }
 
   async updateFundraisingDetails(startupId: number, fundraisingData: FundraisingDetails): Promise<FundraisingDetails> {
-    // Check if fundraising details exist
-    const existing = await this.getFundraisingDetails(startupId);
+    console.log('🔄 Updating fundraising details:', { startupId, fundraisingData });
+    
+    try {
+      // Validate input data
+      if (!startupId || startupId <= 0) {
+        throw new Error('Invalid startup ID');
+      }
+      
+      if (!fundraisingData.type) {
+        throw new Error('Fundraising type is required');
+      }
+      
+      if (!fundraisingData.value || fundraisingData.value <= 0) {
+        throw new Error('Valid fundraising value is required');
+      }
+      
+      if (!fundraisingData.equity || fundraisingData.equity <= 0 || fundraisingData.equity > 100) {
+        throw new Error('Valid equity percentage (1-100%) is required');
+      }
+      
+      // Check if fundraising details exist
+      const existing = await this.getFundraisingDetails(startupId);
+      console.log('📋 Existing fundraising details:', existing);
 
-    if (existing.length > 0) {
-      // Update existing record
-      const { data, error } = await supabase
-        .from('fundraising_details')
-        .update({
-          active: fundraisingData.active,
-          type: fundraisingData.type,
-          value: fundraisingData.value,
-          equity: fundraisingData.equity,
-          validation_requested: fundraisingData.validationRequested,
-          pitch_deck_url: fundraisingData.pitchDeckUrl,
-          pitch_video_url: fundraisingData.pitchVideoUrl
-        })
-        .eq('startup_id', startupId)
-        .select()
-        .single();
+      // Delete all existing fundraising records for this startup (if any)
+      if (existing.length > 0) {
+        console.log('🗑️ Deleting existing fundraising records');
+        const { error: deleteError } = await supabase
+          .from('fundraising_details')
+          .delete()
+          .eq('startup_id', startupId);
 
-      if (error) throw error;
+        if (deleteError) {
+          console.error('❌ Error deleting existing fundraising details:', deleteError);
+          throw new Error(`Delete failed: ${deleteError.message}`);
+        }
 
-      return {
-        active: data.active,
-        type: data.type as InvestmentType,
-        value: data.value,
-        equity: data.equity,
-        validationRequested: data.validation_requested,
-        pitchDeckUrl: data.pitch_deck_url,
-        pitchVideoUrl: data.pitch_video_url
-      };
-    } else {
+        console.log('✅ Existing fundraising records deleted');
+      }
+
       // Insert new record
+      console.log('➕ Inserting new fundraising record');
+      const insertData = {
+        startup_id: startupId,
+        active: fundraisingData.active,
+        type: fundraisingData.type,
+        value: fundraisingData.value,
+        equity: fundraisingData.equity,
+        validation_requested: fundraisingData.validationRequested,
+        pitch_deck_url: fundraisingData.pitchDeckUrl || null,
+        pitch_video_url: fundraisingData.pitchVideoUrl || null
+      };
+      
+      console.log('📝 Insert data:', insertData);
+      
       const { data, error } = await supabase
         .from('fundraising_details')
-        .insert({
-          startup_id: startupId,
-          active: fundraisingData.active,
-          type: fundraisingData.type,
-          value: fundraisingData.value,
-          equity: fundraisingData.equity,
-          validation_requested: fundraisingData.validationRequested,
-          pitch_deck_url: fundraisingData.pitchDeckUrl,
-          pitch_video_url: fundraisingData.pitchVideoUrl
-        })
+        .insert(insertData)
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error('❌ Error inserting fundraising details:', error);
+        throw new Error(`Insert failed: ${error.message}`);
+      }
 
+      console.log('✅ Fundraising details inserted successfully:', data);
       return {
         active: data.active,
         type: data.type as InvestmentType,
@@ -343,6 +499,9 @@ class CapTableService {
         pitchDeckUrl: data.pitch_deck_url,
         pitchVideoUrl: data.pitch_video_url
       };
+    } catch (error) {
+      console.error('❌ Fundraising details operation failed:', error);
+      throw error;
     }
   }
 
@@ -554,12 +713,27 @@ class CapTableService {
   }
 
   private async calculateValuationHistoryManually(startupId: number): Promise<ValuationHistoryData[]> {
+    console.log('🔄 Calculating valuation history manually for startup:', startupId);
+    
     const investments = await this.getInvestmentRecords(startupId);
+    console.log('📊 Found investments:', investments.length);
+    
+    if (investments.length === 0) {
+      console.log('⚠️ No investments found, returning empty array');
+      return [];
+    }
     
     // Group investments by date and calculate cumulative valuation
     const valuationMap = new Map<string, { valuation: number; investment: number }>();
     
     investments.forEach(inv => {
+      console.log('💰 Processing investment:', {
+        date: inv.date,
+        amount: inv.amount,
+        preMoneyValuation: inv.preMoneyValuation,
+        investorName: inv.investorName
+      });
+      
       const existing = valuationMap.get(inv.date) || { valuation: 0, investment: 0 };
       valuationMap.set(inv.date, {
         valuation: existing.valuation + inv.preMoneyValuation,
@@ -567,12 +741,15 @@ class CapTableService {
       });
     });
     
-    return Array.from(valuationMap.entries()).map(([date, data]) => ({
+    const result = Array.from(valuationMap.entries()).map(([date, data]) => ({
       round_name: 'Investment Round',
       valuation: data.valuation,
       investment_amount: data.investment,
       date
     })).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    
+    console.log('📈 Manual valuation history result:', result);
+    return result;
   }
 
   private async calculateEquityDistributionManually(startupId: number): Promise<EquityDistributionData[]> {
@@ -645,13 +822,13 @@ class CapTableService {
   async uploadPitchDeck(file: File, startupId: number): Promise<string> {
     const fileName = `${startupId}/pitch-decks/${Date.now()}_${file.name}`;
     const { data, error } = await supabase.storage
-      .from('cap-table-documents')
+      .from('pitch-decks')
       .upload(fileName, file);
 
     if (error) throw error;
 
     const { data: urlData } = supabase.storage
-      .from('cap-table-documents')
+      .from('pitch-decks')
       .getPublicUrl(fileName);
 
     return urlData.publicUrl;

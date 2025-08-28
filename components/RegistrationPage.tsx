@@ -39,7 +39,7 @@ const RegistrationPage: React.FC<RegistrationPageProps> = ({ onRegister, onNavig
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [showConfirmation, setShowConfirmation] = useState(false);
-    const [uploadedFiles, setUploadedFiles] = useState<{ [key: string]: string }>({});
+    const [uploadedFiles, setUploadedFiles] = useState<{ [key: string]: File | string }>({});
     const [isRedirecting, setIsRedirecting] = useState(false);
 
     // State for founders, only relevant for 'Startup' role
@@ -80,6 +80,16 @@ const RegistrationPage: React.FC<RegistrationPageProps> = ({ onRegister, onNavig
         }
     };
 
+    // Handle file input changes
+    const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>, documentType: string) => {
+        const file = event.target.files?.[0];
+        if (file) {
+            console.log(`File selected for ${documentType}:`, file.name);
+            // Store the file for later upload during registration
+            setUploadedFiles(prev => ({ ...prev, [documentType]: file }));
+        }
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setIsLoading(true);
@@ -90,13 +100,27 @@ const RegistrationPage: React.FC<RegistrationPageProps> = ({ onRegister, onNavig
         const timeoutId = setTimeout(() => {
             setIsLoading(false);
             setError('Registration timed out. Please check your internet connection and try again.');
-        }, 15000); // 15 second timeout
+        }, 30000); // 30 second timeout for file uploads
 
         try {
             console.log('Starting registration process...');
             
-            // Skip file uploads during registration for now
-            console.log('Skipping file uploads during registration (will handle after authentication)...');
+            // Upload files first if they exist
+            let governmentIdUrl = '';
+            let roleSpecificUrl = '';
+            
+            if (uploadedFiles.govId) {
+                console.log('Uploading government ID...');
+                governmentIdUrl = await handleFileUpload(uploadedFiles.govId, 'government-id') || '';
+            }
+            
+            if (uploadedFiles.roleSpecific) {
+                console.log('Uploading role-specific document...');
+                const roleDocType = getRoleSpecificDocumentType(role);
+                roleSpecificUrl = await handleFileUpload(uploadedFiles.roleSpecific, roleDocType) || '';
+            }
+            
+            console.log('File uploads completed. Government ID:', governmentIdUrl, 'Role Specific:', roleSpecificUrl);
             
             console.log('Proceeding with user registration...');
             const { user, error: signUpError, confirmationRequired } = await authService.signUp({
@@ -107,8 +131,8 @@ const RegistrationPage: React.FC<RegistrationPageProps> = ({ onRegister, onNavig
                 startupName: role === 'Startup' ? startupName : undefined,
                 founders: role === 'Startup' ? founders.map(({ id, ...rest }) => rest) : [],
                 fileUrls: {
-                    governmentId: '', // Will be uploaded after authentication
-                    roleSpecific: ''  // Will be uploaded after authentication
+                    governmentId: governmentIdUrl,
+                    roleSpecific: roleSpecificUrl
                 }
             });
             
@@ -132,7 +156,7 @@ const RegistrationPage: React.FC<RegistrationPageProps> = ({ onRegister, onNavig
                 }
             } else if (user) {
                 console.log('User registered successfully:', user);
-                console.log('Note: File uploads will be handled after email confirmation and login');
+                console.log('Verification documents uploaded:', { governmentIdUrl, roleSpecificUrl });
 
                 // Prepare founder data by removing the temporary ID used for React keys
                 const founderDataToSubmit = founders.map(({ id, ...rest }) => rest);
@@ -192,15 +216,15 @@ const RegistrationPage: React.FC<RegistrationPageProps> = ({ onRegister, onNavig
     const renderRoleSpecificDocs = () => {
         switch(role) {
             case 'Investor':
-                return <Input label="PAN Card" id="role-specific" name="role-specific" type="file" required className={fileInputClassName} />;
+                return <Input label="PAN Card" id="role-specific" name="role-specific" type="file" required className={fileInputClassName} onChange={(e) => handleFileChange(e, 'roleSpecific')} />;
             case 'Startup':
-                return <Input label="Proof of Company Registration" id="role-specific" name="role-specific" type="file" required className={fileInputClassName} />;
+                return <Input label="Proof of Company Registration" id="role-specific" name="role-specific" type="file" required className={fileInputClassName} onChange={(e) => handleFileChange(e, 'roleSpecific')} />;
             case 'CA':
-                return <Input label="Copy of CA License" id="role-specific" name="role-specific" type="file" required className={fileInputClassName} />;
+                return <Input label="Copy of CA License" id="role-specific" name="role-specific" type="file" required className={fileInputClassName} onChange={(e) => handleFileChange(e, 'roleSpecific')} />;
             case 'CS':
-                return <Input label="Copy of CS License" id="role-specific" name="role-specific" type="file" required className={fileInputClassName} />;
+                return <Input label="Copy of CS License" id="role-specific" name="role-specific" type="file" required className={fileInputClassName} onChange={(e) => handleFileChange(e, 'roleSpecific')} />;
             case 'Startup Facilitation Center':
-                return <Input label="Proof of Organization Registration" id="role-specific" name="role-specific" type="file" required className={fileInputClassName} />;
+                return <Input label="Proof of Organization Registration" id="role-specific" name="role-specific" type="file" required className={fileInputClassName} onChange={(e) => handleFileChange(e, 'roleSpecific')} />;
             default:
                 return null;
         }
@@ -314,6 +338,7 @@ const RegistrationPage: React.FC<RegistrationPageProps> = ({ onRegister, onNavig
                                 name="gov-id"
                                 type="file" 
                                 className={fileInputClassName} 
+                                onChange={(e) => handleFileChange(e, 'govId')}
                             />
                             {renderRoleSpecificDocs()}
                         </div>

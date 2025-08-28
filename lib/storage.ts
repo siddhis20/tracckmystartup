@@ -75,11 +75,19 @@ export const storageService = {
   // Upload user verification documents
   async uploadVerificationDocument(
     file: File, 
-    userId: string, 
+    userIdOrEmail: string, 
     documentType: string
   ): Promise<FileUploadResult> {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const fileName = `${userId}/${documentType}_${timestamp}_${file.name}`;
+    
+    // Check if userIdOrEmail is a UUID (user ID) or email
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userIdOrEmail);
+    
+    // Use consistent path format: always use email for consistency
+    // This ensures registration and profile uploads go to the same location
+    // Add a unique identifier to prevent duplicates
+    const uniqueId = Math.random().toString(36).substring(2, 15);
+    const fileName = `${userIdOrEmail}/${documentType}_${timestamp}_${uniqueId}_${file.name}`;
     
     return this.uploadFile(file, 'verification-documents', fileName);
   },

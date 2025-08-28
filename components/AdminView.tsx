@@ -1,12 +1,14 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { User, Startup, VerificationRequest, InvestmentOffer, ComplianceStatus, UserRole } from '../types';
+import { ValidationRequest } from '../lib/validationService';
 import Card from './ui/Card';
 import Button from './ui/Button';
 import Badge from './ui/Badge';
-import { Users, Building2, HelpCircle, FileCheck2, LayoutGrid, Eye, Check, X, UserCheck, NotebookPen, BookUser, FileStack, Database } from 'lucide-react';
+import { Users, Building2, HelpCircle, FileCheck2, LayoutGrid, Eye, Check, X, UserCheck, NotebookPen, BookUser, FileStack, Database, Shield, Settings } from 'lucide-react';
 import UserGrowthChart from './admin/UserGrowthChart';
 import UserRoleDistributionChart from './admin/UserRoleDistributionChart';
 import DataManager from './DataManager';
+import { complianceRulesService } from '../lib/complianceRulesService';
 
 
 interface AdminViewProps {
@@ -14,12 +16,14 @@ interface AdminViewProps {
   startups: Startup[];
   verificationRequests: VerificationRequest[];
   investmentOffers: InvestmentOffer[];
+  validationRequests: ValidationRequest[];
   onProcessVerification: (requestId: number, status: 'approved' | 'rejected') => void;
   onProcessOffer: (offerId: number, status: 'approved' | 'rejected') => void;
+  onProcessValidationRequest: (requestId: number, status: 'approved' | 'rejected', notes?: string) => void;
   onViewStartup: (id: number) => void;
 }
 
-type AdminTab = 'dashboard' | 'users' | 'verifications' | 'offers' | 'data';
+type AdminTab = 'dashboard' | 'users' | 'verifications' | 'offers' | 'validations' | 'data' | 'complianceRules';
 type TimeFilter = '30d' | '90d' | 'all';
 
 const SummaryCard: React.FC<{ title: string; value: string | number; icon: React.ReactNode }> = ({ title, value, icon }) => (
@@ -38,7 +42,7 @@ const SummaryCard: React.FC<{ title: string; value: string | number; icon: React
 
 const formatCurrency = (value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact' }).format(value);
 
-const AdminView: React.FC<AdminViewProps> = ({ users, startups, verificationRequests, investmentOffers, onProcessVerification, onProcessOffer, onViewStartup }) => {
+const AdminView: React.FC<AdminViewProps> = ({ users, startups, verificationRequests, investmentOffers, validationRequests, onProcessVerification, onProcessOffer, onProcessValidationRequest, onViewStartup }) => {
     const [activeTab, setActiveTab] = useState<AdminTab>('dashboard');
     const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
 
@@ -46,6 +50,7 @@ const AdminView: React.FC<AdminViewProps> = ({ users, startups, verificationRequ
     const caCount = useMemo(() => users.filter(u => u.role === 'CA').length, [users]);
     const csCount = useMemo(() => users.filter(u => u.role === 'CS').length, [users]);
     const totalOffers = investmentOffers.length;
+    const pendingValidations = validationRequests.filter(v => v.status === 'pending').length;
     
     const filteredUsers = useMemo(() => {
         if (timeFilter === 'all') {
@@ -63,7 +68,9 @@ const AdminView: React.FC<AdminViewProps> = ({ users, startups, verificationRequ
             case 'users': return <UsersTab users={users} />;
             case 'verifications': return <VerificationsTab requests={verificationRequests} onProcessVerification={onProcessVerification} />;
             case 'offers': return <OffersTab offers={investmentOffers} onProcessOffer={onProcessOffer} />;
+            case 'validations': return <ValidationsTab requests={validationRequests} onProcessValidationRequest={onProcessValidationRequest} />;
             case 'data': return <DataManager />;
+            case 'complianceRules': return <ComplianceRulesManager />;
             default: return null;
         }
     }
@@ -78,6 +85,7 @@ const AdminView: React.FC<AdminViewProps> = ({ users, startups, verificationRequ
                 <SummaryCard title="Total CSs" value={csCount} icon={<BookUser className="h-6 w-6 text-brand-primary" />} />
                 <SummaryCard title="Pending Verifications" value={verificationRequests.length} icon={<HelpCircle className="h-6 w-6 text-brand-primary" />} />
                 <SummaryCard title="Pending Offers" value={investmentOffers.filter(o => o.status === 'pending').length} icon={<FileCheck2 className="h-6 w-6 text-brand-primary" />} />
+                <SummaryCard title="Pending Validations" value={pendingValidations} icon={<Shield className="h-6 w-6 text-brand-primary" />} />
                 <SummaryCard title="All Submitted Offers" value={totalOffers} icon={<FileStack className="h-6 w-6 text-brand-primary" />} />
             </div>
 
@@ -87,7 +95,9 @@ const AdminView: React.FC<AdminViewProps> = ({ users, startups, verificationRequ
                     <TabButton id="users" activeTab={activeTab} setActiveTab={setActiveTab} icon={<Users />}>User Management</TabButton>
                     <TabButton id="verifications" activeTab={activeTab} setActiveTab={setActiveTab} icon={<FileCheck2 />}>Verifications</TabButton>
                     <TabButton id="offers" activeTab={activeTab} setActiveTab={setActiveTab} icon={<HelpCircle />}>Offer Approvals</TabButton>
+                    <TabButton id="validations" activeTab={activeTab} setActiveTab={setActiveTab} icon={<Shield />}>Startup Nation Validations</TabButton>
                     <TabButton id="data" activeTab={activeTab} setActiveTab={setActiveTab} icon={<Database />}>Data Management</TabButton>
+                    <TabButton id="complianceRules" activeTab={activeTab} setActiveTab={setActiveTab} icon={<Settings />}>Compliance Rules</TabButton>
                 </nav>
             </div>
 
@@ -306,4 +316,319 @@ const OffersTab: React.FC<{ offers: InvestmentOffer[], onProcessOffer: AdminView
     </Card>
 );
 
+const ValidationsTab: React.FC<{ requests: ValidationRequest[], onProcessValidationRequest: AdminViewProps['onProcessValidationRequest'] }> = ({ requests, onProcessValidationRequest }) => {
+    const [processingRequest, setProcessingRequest] = useState<number | null>(null);
+    const [notes, setNotes] = useState<string>('');
+
+    const handleProcess = async (requestId: number, status: 'approved' | 'rejected') => {
+        setProcessingRequest(requestId);
+        try {
+            await onProcessValidationRequest(requestId, status, notes);
+            setNotes('');
+        } finally {
+            setProcessingRequest(null);
+        }
+    };
+
+    return (
+        <Card>
+            <h3 className="text-lg font-semibold mb-4 text-slate-700">Startup Nation Validation Requests</h3>
+            <div className="mb-4">
+                <label className="block text-sm font-medium text-slate-700 mb-2">Admin Notes (optional)</label>
+                <textarea
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-transparent"
+                    placeholder="Add notes for the startup..."
+                    rows={3}
+                />
+            </div>
+            <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-200">
+                    <thead className="bg-slate-50">
+                        <tr>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Startup Name</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Request Date</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Status</th>
+                            <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-slate-200">
+                        {requests.length > 0 ? requests.map(req => (
+                            <tr key={req.id}>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">{req.startupName}</td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                    {new Date(req.requestDate).toLocaleDateString()}
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
+                                        req.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                                        req.status === 'approved' ? 'bg-green-100 text-green-800' :
+                                        'bg-red-100 text-red-800'
+                                    }`}>
+                                        {req.status}
+                                    </span>
+                                </td>
+                                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                                    {req.status === 'pending' && (
+                                        <>
+                                            <Button 
+                                                size="sm" 
+                                                className="bg-red-600 hover:bg-red-700" 
+                                                onClick={() => handleProcess(req.id, 'rejected')}
+                                                disabled={processingRequest === req.id}
+                                            >
+                                                <X className="mr-1 h-4 w-4" /> 
+                                                {processingRequest === req.id ? 'Processing...' : 'Reject'}
+                                            </Button>
+                                            <Button 
+                                                size="sm" 
+                                                className="bg-green-600 hover:bg-green-700" 
+                                                onClick={() => handleProcess(req.id, 'approved')}
+                                                disabled={processingRequest === req.id}
+                                            >
+                                                <Check className="mr-1 h-4 w-4" /> 
+                                                {processingRequest === req.id ? 'Processing...' : 'Approve'}
+                                            </Button>
+                                        </>
+                                    )}
+                                    {req.status !== 'pending' && req.adminNotes && (
+                                        <span className="text-xs text-slate-500" title={req.adminNotes}>
+                                            Has notes
+                                        </span>
+                                    )}
+                                </td>
+                            </tr>
+                        )) : (
+                            <tr><td colSpan={4} className="text-center py-10 text-slate-500">No validation requests found.</td></tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </Card>
+    );
+};
+
 export default AdminView;
+
+// Structured, table-based manager (country → company type → phase rules)
+const ComplianceRulesManager: React.FC = () => {
+    const [loading, setLoading] = useState(true);
+    const [rows, setRows] = useState<any[]>([]);
+    const [selectedCountry, setSelectedCountry] = useState<string>('');
+    const [companyType, setCompanyType] = useState<string>('default');
+    const [rulesJson, setRulesJson] = useState<any>({});
+    const [newRule, setNewRule] = useState<{ phase: 'firstYear' | 'annual'; name: string; caRequired: boolean; csRequired: boolean }>({ phase: 'annual', name: '', caRequired: false, csRequired: false });
+
+    const load = async () => {
+        setLoading(true);
+        const data = await complianceRulesService.listAll();
+        setRows(data);
+        if (data.length > 0 && !selectedCountry) {
+            setSelectedCountry(data[0].country_code);
+            setRulesJson(data[0].rules || {});
+            const types = Object.keys(data[0].rules || { default: {} });
+            setCompanyType(types[0] || 'default');
+        }
+        setLoading(false);
+    };
+
+    useEffect(() => { load(); }, []);
+
+    useEffect(() => {
+        const row = rows.find(r => r.country_code === selectedCountry);
+        if (row) {
+            setRulesJson(row.rules || {});
+            const types = Object.keys(row.rules || { default: {} });
+            if (!types.includes(companyType)) {
+                setCompanyType(types[0] || 'default');
+            }
+        }
+    }, [selectedCountry]);
+
+    const countryOptions = rows.map(r => r.country_code).sort();
+    const currentCompany = rulesJson[companyType] || { annual: [], firstYear: [] };
+
+    const addRule = () => {
+        if (!newRule.name.trim()) return;
+        const idPrefix = `${selectedCountry.toLowerCase()}-${companyType.toLowerCase().replace(/\s+/g,'')}-${newRule.phase === 'annual' ? 'an' : 'fy'}`;
+        const rule = { id: `${idPrefix}-${Date.now()}`, name: newRule.name.trim(), caRequired: newRule.caRequired, csRequired: newRule.csRequired };
+        const updated = { ...rulesJson };
+        const bucket = (updated[companyType] ||= { annual: [], firstYear: [] });
+        bucket[newRule.phase] = [...(bucket[newRule.phase] || []), rule];
+        setRulesJson(updated);
+        setNewRule({ phase: 'annual', name: '', caRequired: false, csRequired: false });
+    };
+
+    const removeRule = (phase: 'annual' | 'firstYear', id: string) => {
+        const updated = { ...rulesJson };
+        updated[companyType][phase] = updated[companyType][phase].filter((r: any) => r.id !== id);
+        setRulesJson(updated);
+    };
+
+    const updateRuleField = (phase: 'annual' | 'firstYear', id: string, field: 'name' | 'caRequired' | 'csRequired', value: any) => {
+        const updated = { ...rulesJson };
+        updated[companyType][phase] = updated[companyType][phase].map((r: any) => r.id === id ? { ...r, [field]: value } : r);
+        setRulesJson(updated);
+    };
+
+    const saveCountry = async () => {
+        if (!selectedCountry) return;
+        await complianceRulesService.upsertCountryRules(selectedCountry, rulesJson);
+        await load();
+    };
+
+    const addCountry = async () => {
+        const code = prompt('Enter new country code (e.g., IN, US):');
+        if (!code) return;
+        await complianceRulesService.upsertCountryRules(code.toUpperCase(), { default: { annual: [], firstYear: [] } });
+        await load();
+        setSelectedCountry(code.toUpperCase());
+        setCompanyType('default');
+    };
+
+    const addCompanyType = () => {
+        const type = prompt('Enter company type label (e.g., Private Limited Company):');
+        if (!type) return;
+        if (!rulesJson[type]) {
+            const updated = { ...rulesJson, [type]: { annual: [], firstYear: [] } };
+            setRulesJson(updated);
+            setCompanyType(type);
+        } else {
+            setCompanyType(type);
+        }
+    };
+
+    const removeCountry = async (country_code: string) => {
+        if (!confirm(`Remove rules for ${country_code}?`)) return;
+        await complianceRulesService.deleteCountry(country_code);
+        await load();
+    };
+
+    return (
+        <Card>
+            <div className="p-4 space-y-6">
+                <div className="flex flex-wrap gap-3 items-center justify-between">
+                    <h3 className="text-lg font-semibold text-slate-700">Compliance Rules (Global)</h3>
+                    <div className="flex gap-2">
+                        <Button variant="outline" onClick={addCountry}>Add Country</Button>
+                        {selectedCountry && <Button className="bg-red-600 hover:bg-red-700" variant="default" onClick={() => removeCountry(selectedCountry)}>Delete Country</Button>}
+                        <Button onClick={saveCountry}>Save Changes</Button>
+                    </div>
+                </div>
+
+                {loading ? (
+                    <div className="text-slate-500">Loading...</div>
+                ) : (
+                    <div className="grid gap-4">
+                        <div className="flex flex-wrap gap-3 items-center">
+                            <label className="text-sm text-slate-600">Country</label>
+                            <select value={selectedCountry} onChange={(e) => setSelectedCountry(e.target.value)} className="border border-slate-300 rounded-md px-3 py-1 text-sm">
+                                {countryOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                            <label className="text-sm text-slate-600 ml-2">Company Type</label>
+                            <select value={companyType} onChange={(e) => setCompanyType(e.target.value)} className="border border-slate-300 rounded-md px-3 py-1 text-sm">
+                                {Object.keys(rulesJson || {}).map((t: string) => (
+                                    <option key={t} value={t}>{t}</option>
+                                ))}
+                            </select>
+                            <Button variant="outline" onClick={addCompanyType}>Add Company Type</Button>
+                        </div>
+
+                        {/* First Year Rules Table */}
+                        <div>
+                            <h4 className="text-sm font-semibold text-slate-700 mb-2">First Year Rules</h4>
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-slate-200">
+                                    <thead className="bg-slate-50">
+                                        <tr>
+                                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Rule Name</th>
+                                            <th className="px-4 py-2 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">CA Required</th>
+                                            <th className="px-4 py-2 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">CS Required</th>
+                                            <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-200 bg-white">
+                                        {(currentCompany.firstYear || []).map((r: any) => (
+                                            <tr key={r.id}>
+                                                <td className="px-4 py-2">
+                                                    <input value={r.name} onChange={(e) => updateRuleField('firstYear', r.id, 'name', e.target.value)} className="w-full border border-slate-300 rounded-md px-2 py-1 text-sm" />
+                                                </td>
+                                                <td className="px-4 py-2 text-center">
+                                                    <input type="checkbox" checked={!!r.caRequired} onChange={(e) => updateRuleField('firstYear', r.id, 'caRequired', e.target.checked)} />
+                                                </td>
+                                                <td className="px-4 py-2 text-center">
+                                                    <input type="checkbox" checked={!!r.csRequired} onChange={(e) => updateRuleField('firstYear', r.id, 'csRequired', e.target.checked)} />
+                                                </td>
+                                                <td className="px-4 py-2 text-right">
+                                                    <Button size="sm" className="bg-red-600 hover:bg-red-700" onClick={() => removeRule('firstYear', r.id)}>Remove</Button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        {/* Annual Rules Table */}
+                        <div>
+                            <h4 className="text-sm font-semibold text-slate-700 mb-2">Annual Rules</h4>
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-slate-200">
+                                    <thead className="bg-slate-50">
+                                        <tr>
+                                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Rule Name</th>
+                                            <th className="px-4 py-2 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">CA Required</th>
+                                            <th className="px-4 py-2 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">CS Required</th>
+                                            <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-200 bg-white">
+                                        {(currentCompany.annual || []).map((r: any) => (
+                                            <tr key={r.id}>
+                                                <td className="px-4 py-2">
+                                                    <input value={r.name} onChange={(e) => updateRuleField('annual', r.id, 'name', e.target.value)} className="w-full border border-slate-300 rounded-md px-2 py-1 text-sm" />
+                                                </td>
+                                                <td className="px-4 py-2 text-center">
+                                                    <input type="checkbox" checked={!!r.caRequired} onChange={(e) => updateRuleField('annual', r.id, 'caRequired', e.target.checked)} />
+                                                </td>
+                                                <td className="px-4 py-2 text-center">
+                                                    <input type="checkbox" checked={!!r.csRequired} onChange={(e) => updateRuleField('annual', r.id, 'csRequired', e.target.checked)} />
+                                                </td>
+                                                <td className="px-4 py-2 text-right">
+                                                    <Button size="sm" className="bg-red-600 hover:bg-red-700" onClick={() => removeRule('annual', r.id)}>Remove</Button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        {/* Add Rule */}
+                        <div className="flex flex-wrap items-end gap-2">
+                            <div>
+                                <label className="block text-xs text-slate-600 mb-1">Phase</label>
+                                <select value={newRule.phase} onChange={(e) => setNewRule(prev => ({ ...prev, phase: e.target.value as any }))} className="border border-slate-300 rounded-md px-2 py-1 text-sm">
+                                    <option value="annual">Annual</option>
+                                    <option value="firstYear">First Year</option>
+                                </select>
+                            </div>
+                            <div className="flex-1 min-w-[240px]">
+                                <label className="block text-xs text-slate-600 mb-1">Rule Name</label>
+                                <input value={newRule.name} onChange={(e) => setNewRule(prev => ({ ...prev, name: e.target.value }))} className="w-full border border-slate-300 rounded-md px-2 py-1 text-sm" placeholder="e.g., File Annual Return (MGT-7)" />
+                            </div>
+                            <label className="flex items-center gap-2 text-sm text-slate-700">
+                                <input type="checkbox" checked={newRule.caRequired} onChange={(e) => setNewRule(prev => ({ ...prev, caRequired: e.target.checked }))} /> CA Required
+                            </label>
+                            <label className="flex items-center gap-2 text-sm text-slate-700">
+                                <input type="checkbox" checked={newRule.csRequired} onChange={(e) => setNewRule(prev => ({ ...prev, csRequired: e.target.checked }))} /> CS Required
+                            </label>
+                            <Button onClick={addRule}>Add Rule</Button>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </Card>
+    );
+};

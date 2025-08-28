@@ -138,7 +138,7 @@ export const mockStartupAdditionRequests: StartupAdditionRequest[] = [
 ];
 
 export const mockUsers: User[] = [
-    { id: 'user-1', name: 'Alice Investor', email: 'investor@example.com', role: 'Investor', registrationDate: '2023-01-10' },
+    { id: 'user-1', name: 'Alice Investor', email: 'investor@example.com', role: 'Investor', registrationDate: '2023-01-10', investorCode: 'INV-A7B3C9' },
     { id: 'user-2', name: 'Alex Chen', email: 'alex@innovateai.com', role: 'Startup', registrationDate: '2022-01-15' },
     { id: 'user-3', name: 'Bob CA', email: 'ca@example.com', role: 'CA', registrationDate: '2023-03-01' },
     { id: 'user-4', name: 'Charlie CS', email: 'cs@example.com', role: 'CS', registrationDate: '2023-04-01' },
@@ -171,4 +171,129 @@ export const mockInvestmentOffers: InvestmentOffer[] = [
         equityPercentage: 17,
         status: 'pending' 
     }
+];
+
+// Compliance rules for different countries and company types
+export const COMPLIANCE_RULES = {
+    'Canada': {
+        'Private Limited': {
+            firstYear: [
+                { id: 'articles', name: 'Articles of Incorporation', caRequired: true, csRequired: false }
+            ],
+            annual: [
+                { id: 'annual_report', name: 'Annual Report', caRequired: true, csRequired: false },
+                { id: 'board_minutes', name: 'Board Meeting Minutes', caRequired: false, csRequired: true }
+            ]
+        },
+        'Public Limited': {
+            firstYear: [
+                { id: 'articles', name: 'Articles of Incorporation', caRequired: true, csRequired: true }
+            ],
+            annual: [
+                { id: 'annual_report', name: 'Annual Report', caRequired: true, csRequired: true },
+                { id: 'board_minutes', name: 'Board Meeting Minutes', caRequired: true, csRequired: true }
+            ]
+        },
+        default: {
+            firstYear: [
+                { id: 'articles', name: 'Articles of Incorporation', caRequired: true, csRequired: false }
+            ],
+            annual: [
+                { id: 'annual_report', name: 'Annual Report', caRequired: true, csRequired: false },
+                { id: 'board_minutes', name: 'Board Meeting Minutes', caRequired: false, csRequired: true }
+            ]
+        }
+    },
+    'India': {
+        'Private Limited': {
+            firstYear: [
+                { id: 'articles', name: 'Articles of Incorporation', caRequired: true, csRequired: false }
+            ],
+            annual: [
+                { id: 'annual_report', name: 'Annual Report', caRequired: true, csRequired: false },
+                { id: 'board_minutes', name: 'Board Meeting Minutes', caRequired: false, csRequired: true }
+            ]
+        },
+        'Public Limited': {
+            firstYear: [
+                { id: 'articles', name: 'Articles of Incorporation', caRequired: true, csRequired: true }
+            ],
+            annual: [
+                { id: 'annual_report', name: 'Annual Report', caRequired: true, csRequired: true },
+                { id: 'board_minutes', name: 'Board Meeting Minutes', caRequired: true, csRequired: true }
+            ]
+        },
+        default: {
+            firstYear: [
+                { id: 'articles', name: 'Articles of Incorporation', caRequired: true, csRequired: false }
+            ],
+            annual: [
+                { id: 'annual_report', name: 'Annual Report', caRequired: true, csRequired: false },
+                { id: 'board_minutes', name: 'Board Meeting Minutes', caRequired: false, csRequired: true }
+            ]
+        }
+    },
+    'United States': {
+        'LLC': {
+            firstYear: [
+                { id: 'articles', name: 'Articles of Organization', caRequired: false, csRequired: false }
+            ],
+            annual: [
+                { id: 'annual_report', name: 'Annual Report', caRequired: false, csRequired: false },
+                { id: 'board_minutes', name: 'Board Meeting Minutes', caRequired: false, csRequired: false }
+            ]
+        },
+        'Corporation': {
+            firstYear: [
+                { id: 'articles', name: 'Articles of Incorporation', caRequired: true, csRequired: false }
+            ],
+            annual: [
+                { id: 'annual_report', name: 'Annual Report', caRequired: true, csRequired: false },
+                { id: 'board_minutes', name: 'Board Meeting Minutes', caRequired: false, csRequired: true }
+            ]
+        },
+        default: {
+            firstYear: [
+                { id: 'articles', name: 'Articles of Incorporation', caRequired: true, csRequired: false }
+            ],
+            annual: [
+                { id: 'annual_report', name: 'Annual Report', caRequired: true, csRequired: false },
+                { id: 'board_minutes', name: 'Board Meeting Minutes', caRequired: false, csRequired: true }
+            ]
+        }
+    },
+    default: {
+        'Private Limited': {
+            firstYear: [
+                { id: 'articles', name: 'Articles of Incorporation', caRequired: true, csRequired: false }
+            ],
+            annual: [
+                { id: 'annual_report', name: 'Annual Report', caRequired: true, csRequired: false },
+                { id: 'board_minutes', name: 'Board Meeting Minutes', caRequired: false, csRequired: true }
+            ]
+        },
+        default: {
+            firstYear: [
+                { id: 'articles', name: 'Articles of Incorporation', caRequired: true, csRequired: false }
+            ],
+            annual: [
+                { id: 'annual_report', name: 'Annual Report', caRequired: true, csRequired: false },
+                { id: 'board_minutes', name: 'Board Meeting Minutes', caRequired: false, csRequired: true }
+            ]
+        }
+    }
+};
+
+// Countries list for dropdown
+export const COUNTRIES = [
+    'Canada',
+    'India', 
+    'United States',
+    'United Kingdom',
+    'Australia',
+    'Germany',
+    'France',
+    'Japan',
+    'Singapore',
+    'Brazil'
 ];
