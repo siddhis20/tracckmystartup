@@ -1373,7 +1373,7 @@ const App: React.FC = () => {
       <header className="bg-white shadow-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
           <div className="flex items-center gap-3">
-            <img src={LogoTMS} alt="TrackMyStartup" className="h-8 w-8 scale-[5] md:scale-[8] lg:scale-[10] xl:scale-[12] origin-left" />
+            <img src={LogoTMS} alt="TrackMyStartup" className="h-8 w-8 scale-[5] md:scale-[4] lg:scale-[5] xl:scale-[6] origin-left" />
           </div>
            <div className="flex items-center gap-6">
             {currentUser?.role === 'Investor' && (
