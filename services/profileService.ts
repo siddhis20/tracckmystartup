@@ -9,10 +9,14 @@ export interface ProfileUpdateData {
   state?: string;
   country?: string;
   company?: string;
+  company_type?: string; // Added company type field
   government_id?: string;
   ca_license?: string;
   verification_documents?: string[];
   profile_photo_url?: string;
+  investment_advisor_code_entered?: string;
+  logo_url?: string;
+  financial_advisor_license_url?: string;
 }
 
 export interface FileUploadResult {
@@ -118,10 +122,14 @@ export class ProfileService {
         state: profileData.state,
         country: profileData.country,
         company: profileData.company,
+        company_type: profileData.company_type, // Added company type field
         government_id: profileData.government_id,
         ca_license: profileData.ca_license,
         verification_documents: profileData.verification_documents,
         profile_photo_url: profileData.profile_photo_url,
+        investment_advisor_code_entered: profileData.investment_advisor_code_entered,
+        logo_url: profileData.logo_url,
+        financial_advisor_license_url: profileData.financial_advisor_license_url,
         updated_at: new Date().toISOString()
       };
 
@@ -226,6 +234,14 @@ export class ProfileService {
           // CS licenses are stored in the ca_license field (existing working system)
           updateData.ca_license = uploadResult.url;
           console.log('✅ CS license stored in ca_license field (existing system)');
+          break;
+        case 'logo':
+          updateData.logo_url = uploadResult.url;
+          console.log('✅ Logo URL updated in database');
+          break;
+        case 'financial-license':
+          updateData.financial_advisor_license_url = uploadResult.url;
+          console.log('✅ Financial advisor license URL updated in database');
           break;
         case 'verification-documents':
           // For additional verification documents, we need to handle the array

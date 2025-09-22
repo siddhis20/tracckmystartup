@@ -15,7 +15,12 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigateToLogin, onNavigate
       <header className="bg-white shadow-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-3 sm:py-4 flex justify-between items-center">
           <div className="flex items-center gap-2 sm:gap-3">
-            <img src={LogoTMS} alt="TrackMyStartup" className="h-7 w-7 sm:h-8 sm:w-8 scale-[5] sm:scale-[5] origin-left" />
+            <img 
+              src={LogoTMS} 
+              alt="TrackMyStartup" 
+              className="h-7 w-7 sm:h-8 sm:w-8 scale-[5] sm:scale-[5] origin-left cursor-pointer hover:opacity-80 transition-opacity" 
+              onClick={() => window.location.reload()}
+            />
           </div>
           <div className="flex items-center gap-2 sm:gap-4">
             <Button 
@@ -182,47 +187,6 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigateToLogin, onNavigate
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="bg-slate-900 text-white py-12 px-4 sm:px-6 lg:px-8">
-        <div className="container mx-auto">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-            <div className="col-span-1 md:col-span-2">
-              <div className="flex items-center gap-3 mb-4">
-                <Briefcase className="h-8 w-8 text-brand-primary" />
-                <h3 className="text-2xl font-bold">TrackMyStartup</h3>
-              </div>
-              <p className="text-slate-300 mb-4 max-w-md">
-                The comprehensive platform for tracking startup growth, compliance, and investments. 
-                Built for investors, founders, and professionals.
-              </p>
-            </div>
-            
-            <div>
-              <h4 className="text-lg font-semibold mb-4">Platform</h4>
-              <ul className="space-y-2 text-slate-300">
-                <li>Investor Dashboard</li>
-                <li>Startup Health</li>
-                <li>Compliance Tracking</li>
-                <li>Investment Management</li>
-              </ul>
-            </div>
-            
-            <div>
-              <h4 className="text-lg font-semibold mb-4">Support</h4>
-              <ul className="space-y-2 text-slate-300">
-                <li>Documentation</li>
-                <li>Help Center</li>
-                <li>Contact Support</li>
-                <li>Community</li>
-              </ul>
-            </div>
-          </div>
-          
-          <div className="border-t border-slate-800 mt-8 pt-8 text-center text-slate-400">
-            <p>&copy; 2025 TrackMyStartup. All rights reserved.</p>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 };

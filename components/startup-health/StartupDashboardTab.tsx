@@ -3,9 +3,11 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 import { Startup, InvestmentOffer } from '../../types';
 import { DashboardMetricsService, DashboardMetrics } from '../../lib/dashboardMetricsService';
 import { financialsService } from '../../lib/financialsService';
-import { formatIndianCurrency, formatIndianCurrencyCompact } from '../../lib/currencyUtils';
+import { formatCurrency, formatCurrencyCompact } from '../../lib/utils';
+import { useStartupCurrency } from '../../lib/hooks/useStartupCurrency';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
+import ComplianceSubmissionButton from '../ComplianceSubmissionButton';
 import { DollarSign, Zap, TrendingUp } from 'lucide-react';
 
 interface StartupDashboardTabProps {
@@ -13,11 +15,13 @@ interface StartupDashboardTabProps {
   isViewOnly?: boolean;
   offers?: InvestmentOffer[];
   onProcessOffer?: (offerId: number, status: 'approved' | 'rejected' | 'accepted' | 'completed') => void;
+  currentUser?: any;
 }
 
 const COLORS = ['#1e40af', '#1d4ed8', '#3b82f6', '#60a5fa'];
 
-const StartupDashboardTab: React.FC<StartupDashboardTabProps> = ({ startup, isViewOnly = false, offers = [], onProcessOffer }) => {
+const StartupDashboardTab: React.FC<StartupDashboardTabProps> = ({ startup, isViewOnly = false, offers = [], onProcessOffer, currentUser }) => {
+  const startupCurrency = useStartupCurrency(startup);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [revenueData, setRevenueData] = useState<any[]>([]);
@@ -116,13 +120,13 @@ const StartupDashboardTab: React.FC<StartupDashboardTabProps> = ({ startup, isVi
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
         <MetricCard
           title="MRR"
-          value={isLoading ? "Loading..." : formatIndianCurrencyCompact(metrics?.mrr || 0)}
+          value={isLoading ? "Loading..." : formatCurrencyCompact(metrics?.mrr || 0, startupCurrency)}
           icon={<DollarSign className="h-5 w-5 sm:h-6 sm:w-6" />}
           subtitle="Monthly Recurring Revenue"
         />
         <MetricCard
           title="Burn Rate"
-          value={isLoading ? "Loading..." : formatIndianCurrencyCompact(metrics?.burnRate || 0)}
+          value={isLoading ? "Loading..." : formatCurrencyCompact(metrics?.burnRate || 0, startupCurrency)}
           icon={<Zap className="h-5 w-5 sm:h-6 sm:w-6" />}
           subtitle={metrics?.burnRate && metrics.burnRate > 0 ? "Monthly Net Loss" : "Monthly Net Profit"}
         />
@@ -135,6 +139,7 @@ const StartupDashboardTab: React.FC<StartupDashboardTabProps> = ({ startup, isVi
         />
       </div>
 
+
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         <Card padding="md">
@@ -144,8 +149,8 @@ const StartupDashboardTab: React.FC<StartupDashboardTabProps> = ({ startup, isVi
               <BarChart data={revenueData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="name" fontSize={10} />
-                <YAxis fontSize={10} tickFormatter={(val) => formatIndianCurrencyCompact(val)} />
-                <Tooltip formatter={(value: number) => formatIndianCurrency(value)} />
+                <YAxis fontSize={10} tickFormatter={(val) => formatCurrencyCompact(val, startupCurrency)} />
+                <Tooltip formatter={(value: number) => formatCurrency(value, startupCurrency)} />
                 <Legend wrapperStyle={{fontSize: "12px"}} />
                 <Bar dataKey="revenue" fill="#16a34a" name="Revenue" />
                 <Bar dataKey="expenses" fill="#dc2626" name="Expenses" />
@@ -173,7 +178,7 @@ const StartupDashboardTab: React.FC<StartupDashboardTabProps> = ({ startup, isVi
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip formatter={(value: number) => formatIndianCurrency(value)} />
+                <Tooltip formatter={(value: number) => formatCurrency(value, startupCurrency)} />
               </PieChart>
             </ResponsiveContainer>
           </div>

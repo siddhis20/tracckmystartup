@@ -4,7 +4,7 @@ import Card from './ui/Card';
 import Button from './ui/Button';
 import Modal from './ui/Modal';
 import Input from './ui/Input';
-import { LayoutGrid, PlusCircle, FileText, Video, Gift, Film, Edit, Users, Eye, CheckCircle, Check } from 'lucide-react';
+import { LayoutGrid, PlusCircle, FileText, Video, Gift, Film, Edit, Users, Eye, CheckCircle, Check, Search, Share2 } from 'lucide-react';
 import PortfolioDistributionChart from './charts/PortfolioDistributionChart';
 import Badge from './ui/Badge';
 import { investorService, ActiveFundraisingStartup } from '../lib/investorService';
@@ -94,8 +94,45 @@ const FacilitatorView: React.FC<FacilitatorViewProps> = ({ startups, newInvestme
   const [isLoadingRecognition, setIsLoadingRecognition] = useState(false);
   const [portfolioStartups, setPortfolioStartups] = useState<StartupDashboardData[]>([]);
   const [isLoadingPortfolio, setIsLoadingPortfolio] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
 
   const formatCurrency = (value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact' }).format(value);
+
+  const handleShare = async (startup: ActiveFundraisingStartup) => {
+    console.log('Share button clicked for startup:', startup.name);
+    console.log('Startup object:', startup);
+    const videoUrl = startup.pitchVideoUrl || 'Video not available';
+    const details = `Startup: ${startup.name || 'N/A'}\nSector: ${startup.sector || 'N/A'}\nAsk: $${(startup.investmentValue || 0).toLocaleString()} for ${startup.equityAllocation || 0}% equity\nValuation: $${(startup.currentValuation || 0).toLocaleString()}\n\nPitch Video: ${videoUrl}`;
+    console.log('Share details:', details);
+        try {
+            if (navigator.share) {
+                console.log('Using native share API');
+                const shareData = {
+                    title: startup.name || 'Startup Pitch',
+                    text: details,
+                    url: videoUrl !== 'Video not available' ? videoUrl : undefined
+                };
+                await navigator.share(shareData);
+            } else if (navigator.clipboard && navigator.clipboard.writeText) {
+        console.log('Using clipboard API');
+        await navigator.clipboard.writeText(details);
+        alert('Startup details copied to clipboard');
+      } else {
+        console.log('Using fallback copy method');
+        // Fallback: hidden textarea copy
+        const textarea = document.createElement('textarea');
+        textarea.value = details;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        alert('Startup details copied to clipboard');
+      }
+    } catch (err) {
+      console.error('Share failed', err);
+      alert('Unable to share. Try copying manually.');
+    }
+  };
 
   const myPortfolio = useMemo(() => portfolioStartups, [portfolioStartups]);
   const myApplications = useMemo(() => startupAdditionRequests, [startupAdditionRequests]);
@@ -1219,21 +1256,45 @@ const FacilitatorView: React.FC<FacilitatorViewProps> = ({ startups, newInvestme
                 </div>
         );
       case 'discover':
+        // Filter startups based on search term
+        const filteredStartups = searchTerm.trim() 
+          ? activeFundraisingStartups.filter(startup => 
+              startup.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+              startup.sector.toLowerCase().includes(searchTerm.toLowerCase())
+            )
+          : activeFundraisingStartups;
+
         return (
           <div className="animate-fade-in max-w-3xl mx-auto w-full">
+            {/* Search Bar */}
+            <div className="mb-6">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search startups by name or sector..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
+                />
+              </div>
+            </div>
+
             {isLoadingPitches ? (
               <Card className="text-center py-16">
                 <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto mb-4"></div>
                 <p className="text-slate-600">Loading Pitches...</p>
               </Card>
-            ) : activeFundraisingStartups.length === 0 ? (
+            ) : filteredStartups.length === 0 ? (
               <Card className="p-8 text-center">
                 <Film className="h-10 w-10 text-slate-400 mx-auto mb-2" />
-                <p className="text-slate-600">No active fundraising pitches.</p>
-      </Card>
+                <p className="text-slate-600">
+                  {searchTerm.trim() ? 'No startups found matching your search.' : 'No active fundraising pitches.'}
+                </p>
+              </Card>
             ) : (
               <div className="space-y-6">
-                {activeFundraisingStartups.map(inv => {
+                {filteredStartups.map(inv => {
                   const embedUrl = investorService.getYoutubeEmbedUrl(inv.pitchVideoUrl);
                   return (
                     <Card key={inv.id} className="!p-0 overflow-hidden shadow-lg">
@@ -1259,17 +1320,17 @@ const FacilitatorView: React.FC<FacilitatorViewProps> = ({ startups, newInvestme
                                   <svg className="w-8 h-8 text-white ml-1" fill="currentColor" viewBox="0 0 24 24">
                                     <path d="M8 5v14l11-7z"/>
                                   </svg>
-                    </div>
-                  </div>
-                </div>
+                                </div>
+                              </div>
+                            </div>
                           )
                         ) : (
                           <div className="w-full h-full bg-gradient-to-br from-slate-800 to-slate-900 flex items-center justify-center">
                             <div className="text-center text-slate-400">
                               <Video className="h-16 w-16 mx-auto mb-2 opacity-50" />
                               <p className="text-sm">Video not available</p>
-                </div>
-              </div>
+                            </div>
+                          </div>
                         )}
                       </div>
                       <div className="p-5">
@@ -1280,28 +1341,37 @@ const FacilitatorView: React.FC<FacilitatorViewProps> = ({ startups, newInvestme
                               <div className="flex items-center gap-1 bg-blue-600 text-white px-3 py-1.5 rounded-full text-xs font-medium">
                                 <CheckCircle className="h-3 w-3" />
                                 Startup Nation Verified
-        </div>
-      )}
-                    </div>
-                  </div>
+                              </div>
+                            )}
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleShare(inv)}
+                            className="flex items-center gap-2"
+                          >
+                            <Share2 className="h-4 w-4" />
+                            Share
+                          </Button>
+                        </div>
                         <p className="text-sm text-slate-500 font-medium">{inv.sector}</p>
                         <div className="mt-3 text-sm">
                           Ask: ${inv.investmentValue.toLocaleString()} for <span className="font-semibold text-blue-600">{inv.equityAllocation}%</span> equity
-                </div>
+                        </div>
                         <div className="mt-3 text-sm text-slate-500">
                           {inv.pitchDeckUrl ? (
                             <a href={inv.pitchDeckUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 hover:text-blue-600"><FileText className="h-4 w-4"/> View Deck</a>
                           ) : (
                             <span className="inline-flex items-center gap-2 text-slate-400"><FileText className="h-4 w-4"/> Deck not available</span>
                           )}
-                </div>
-              </div>
-            </Card>
+                        </div>
+                      </div>
+                    </Card>
                   );
                 })}
               </div>
-          )}
-        </div>
+            )}
+          </div>
         );
       default:
         return null;

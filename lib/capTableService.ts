@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { InvestmentRecord, InvestorType, InvestmentRoundType, Founder, FundraisingDetails, InvestmentType } from '../types';
+import { validateInvestmentDate, validateValuationDate } from './dateValidation';
 
 export interface InvestmentSummary {
   total_equity_funding: number;
@@ -79,6 +80,8 @@ class CapTableService {
       investorCode: record.investor_code,
       amount: record.amount,
       equityAllocated: record.equity_allocated,
+      shares: record.shares,
+      pricePerShare: record.price_per_share,
       preMoneyValuation: record.pre_money_valuation,
       postMoneyValuation: record.post_money_valuation,
       proofUrl: record.proof_url
@@ -100,6 +103,28 @@ class CapTableService {
       throw error;
     }
     return data?.total_shares ?? 0;
+  }
+
+  async getStartupSharesData(startupId: number): Promise<{totalShares: number, esopReservedShares: number, pricePerShare: number}> {
+    const { data, error } = await supabase
+      .from('startup_shares')
+      .select('total_shares, esop_reserved_shares, price_per_share')
+      .eq('startup_id', startupId)
+      .single();
+
+    if (error && error.code !== 'PGRST116') { // PGRST116: row not found
+      console.error('❌ Error loading startup shares data:', error);
+      throw error;
+    }
+    
+    const result = {
+      totalShares: data?.total_shares ?? 0,
+      esopReservedShares: data?.esop_reserved_shares ?? 0,
+      pricePerShare: data?.price_per_share ?? 0
+    };
+    
+    console.log('🔍 Shares data loaded from startup_shares table:', result);
+    return result;
   }
 
   async upsertTotalShares(startupId: number, totalShares: number, pricePerShare?: number): Promise<number> {
@@ -135,6 +160,59 @@ class CapTableService {
     return data?.price_per_share ?? 0;
   }
 
+  async upsertPricePerShare(startupId: number, pricePerShare: number): Promise<number> {
+    if (pricePerShare < 0 || !Number.isFinite(pricePerShare)) {
+      throw new Error('Price per share must be a non-negative number');
+    }
+
+    // First, check if a record exists
+    const { data: existingData } = await supabase
+      .from('startup_shares')
+      .select('total_shares, esop_reserved_shares')
+      .eq('startup_id', startupId)
+      .single();
+
+    const upsertData = {
+      startup_id: startupId,
+      price_per_share: pricePerShare,
+      total_shares: existingData?.total_shares ?? 1000000, // Default to 1M shares if not set
+      esop_reserved_shares: existingData?.esop_reserved_shares ?? 0, // Default to 0 if not set
+      updated_at: new Date().toISOString()
+    };
+
+    const { data, error } = await supabase
+      .from('startup_shares')
+      .upsert(upsertData, { onConflict: 'startup_id' })
+      .select('price_per_share, total_shares, esop_reserved_shares')
+      .single();
+
+    if (error) {
+      console.error('❌ Upsert error:', error);
+      throw error;
+    }
+
+    return data.price_per_share ?? pricePerShare;
+  }
+
+  async initializeStartupShares(startupId: number, totalShares: number = 1000000, pricePerShare: number = 1.0): Promise<void> {
+    const initData = {
+      startup_id: startupId,
+      total_shares: totalShares,
+      price_per_share: pricePerShare,
+      esop_reserved_shares: 0,
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await supabase
+      .from('startup_shares')
+      .upsert(initData, { onConflict: 'startup_id' });
+
+    if (error) {
+      console.error('❌ Initialize error:', error);
+      throw error;
+    }
+  }
+
   async getEsopReservedShares(startupId: number): Promise<number> {
     const { data, error } = await supabase
       .from('startup_shares')
@@ -146,6 +224,33 @@ class CapTableService {
       throw error;
     }
     return data?.esop_reserved_shares ?? 0;
+  }
+
+  // Get total ESOP equity allocated to employees
+  async getTotalEsopEquity(startupId: number): Promise<number> {
+    const { data, error } = await supabase
+      .from('employees')
+      .select('esop_allocation')
+      .eq('startup_id', startupId);
+
+    if (error) throw error;
+
+    const totalEsopValue = (data || []).reduce((sum, emp) => sum + (emp.esop_allocation || 0), 0);
+    
+    // Get startup valuation to calculate percentage
+    const { data: startupData, error: startupError } = await supabase
+      .from('startups')
+      .select('current_valuation')
+      .eq('id', startupId)
+      .single();
+
+    if (startupError) throw startupError;
+
+    const valuation = startupData?.current_valuation || 0;
+    if (valuation === 0) return 0;
+
+    // Calculate ESOP equity percentage based on valuation
+    return (totalEsopValue / valuation) * 100;
   }
 
   async upsertEsopReservedShares(startupId: number, shares: number): Promise<number> {
@@ -174,6 +279,13 @@ class CapTableService {
     if (!investmentData.date) {
       throw new Error('Date is required');
     }
+    
+    // Validate investment date (no future dates allowed)
+    const dateValidation = validateInvestmentDate(investmentData.date);
+    if (!dateValidation.isValid) {
+      throw new Error(dateValidation.error);
+    }
+    
     if (!investmentData.investorType) {
       throw new Error('Investor type is required');
     }
@@ -189,6 +301,13 @@ class CapTableService {
     if (!investmentData.equityAllocated || investmentData.equityAllocated < 0) {
       throw new Error('Valid equity allocation is required');
     }
+    // Validate shares data if provided
+    if (investmentData.shares !== undefined && (!investmentData.shares || investmentData.shares <= 0)) {
+      throw new Error('Valid number of shares is required');
+    }
+    if (investmentData.pricePerShare !== undefined && (!investmentData.pricePerShare || investmentData.pricePerShare <= 0)) {
+      throw new Error('Valid price per share is required');
+    }
     // Post-money will be computed from amount & equity in UI; backend allows null and stores provided value
 
     const { data, error } = await supabase
@@ -202,6 +321,8 @@ class CapTableService {
         investor_code: investmentData.investorCode,
         amount: investmentData.amount,
         equity_allocated: investmentData.equityAllocated,
+        shares: investmentData.shares || null,
+        price_per_share: investmentData.pricePerShare || null,
         pre_money_valuation: investmentData.preMoneyValuation,
         post_money_valuation: (investmentData as any).postMoneyValuation ?? null,
         proof_url: investmentData.proofUrl
@@ -223,6 +344,8 @@ class CapTableService {
       investorCode: data.investor_code,
       amount: data.amount,
       equityAllocated: data.equity_allocated,
+      shares: data.shares,
+      pricePerShare: data.price_per_share,
       preMoneyValuation: data.pre_money_valuation,
       postMoneyValuation: data.post_money_valuation,
       proofUrl: data.proof_url
@@ -232,7 +355,14 @@ class CapTableService {
   async updateInvestmentRecord(id: string, investmentData: Partial<InvestmentRecord>): Promise<InvestmentRecord> {
     const updateData: any = {};
     
-    if (investmentData.date !== undefined) updateData.date = investmentData.date;
+    if (investmentData.date !== undefined) {
+      // Validate investment date (no future dates allowed)
+      const dateValidation = validateInvestmentDate(investmentData.date);
+      if (!dateValidation.isValid) {
+        throw new Error(dateValidation.error);
+      }
+      updateData.date = investmentData.date;
+    }
     if (investmentData.investorType !== undefined) updateData.investor_type = investmentData.investorType;
     if (investmentData.investmentType !== undefined) updateData.investment_type = investmentData.investmentType;
     if (investmentData.investorName !== undefined) updateData.investor_name = investmentData.investorName;
@@ -335,18 +465,30 @@ class CapTableService {
   // =====================================================
 
   async getFounders(startupId: number): Promise<Founder[]> {
+    console.log('🔍 Loading founders for startup:', startupId);
+    
     const { data, error } = await supabase
       .from('founders')
       .select('*')
       .eq('startup_id', startupId)
       .order('created_at', { ascending: true });
 
-    if (error) throw error;
+    if (error) {
+      console.error('❌ Error loading founders:', error);
+      throw error;
+    }
 
-    return (data || []).map(founder => ({
+    console.log('🔍 Raw founders data from database:', data);
+    
+    const mappedFounders = (data || []).map(founder => ({
       name: founder.name,
-      email: founder.email
+      email: founder.email,
+      shares: founder.shares || 0,
+      equityPercentage: founder.equity_percentage ? Number(founder.equity_percentage) : 0
     }));
+    
+    console.log('🔍 Mapped founders data:', mappedFounders);
+    return mappedFounders;
   }
 
   async updateFounders(startupId: number, founders: Founder[]): Promise<void> {
@@ -363,7 +505,9 @@ class CapTableService {
       const foundersData = founders.map(founder => ({
         startup_id: startupId,
         name: founder.name,
-        email: founder.email
+        email: founder.email,
+        shares: founder.shares || 0,
+        equity_percentage: founder.equityPercentage || 0
       }));
 
       const { error: insertError } = await supabase
@@ -389,7 +533,9 @@ class CapTableService {
       .insert({
         startup_id: startupId,
         name: founder.name,
-        email: founder.email
+        email: founder.email,
+        equity_percentage: founder.equityPercentage || null,
+        shares: founder.shares || null
       });
 
     if (error) throw error;
@@ -533,6 +679,12 @@ class CapTableService {
     investmentAmount?: number;
     notes?: string;
   }): Promise<void> {
+    // Validate valuation date (no future dates allowed)
+    const dateValidation = validateValuationDate(valuationData.date);
+    if (!dateValidation.isValid) {
+      throw new Error(dateValidation.error);
+    }
+
     const { error } = await supabase
       .from('valuation_history')
       .insert({
@@ -669,13 +821,39 @@ class CapTableService {
 
       if (error) {
         console.log('❌ Error calling get_fundraising_status RPC, using direct query');
-        return this.getFundraisingDetails(startupId);
+        const details = await this.getFundraisingDetails(startupId);
+        if (details.length > 0) {
+          const detail = details[0];
+          return {
+            active: detail.active,
+            type: detail.type,
+            value: detail.value,
+            equity: detail.equity,
+            validation_requested: detail.validationRequested,
+            pitch_deck_url: detail.pitchDeckUrl,
+            pitch_video_url: detail.pitchVideoUrl
+          };
+        }
+        return null;
       }
 
       return data[0] || null;
     } catch (error) {
       console.log('🔄 Falling back to direct query for fundraising status');
-      return this.getFundraisingDetails(startupId);
+      const details = await this.getFundraisingDetails(startupId);
+      if (details.length > 0) {
+        const detail = details[0];
+        return {
+          active: detail.active,
+          type: detail.type,
+          value: detail.value,
+          equity: detail.equity,
+          validation_requested: detail.validationRequested,
+          pitch_deck_url: detail.pitchDeckUrl,
+          pitch_video_url: detail.pitchVideoUrl
+        };
+      }
+      return null;
     }
   }
 

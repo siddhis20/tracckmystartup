@@ -41,29 +41,65 @@ export const profileService = {
   // PROFILE DATA OPERATIONS
   // =====================================================
 
-  // Get complete profile data for a startup
+  // Get complete profile data for a startup - Using direct database queries for reliability
   async getStartupProfile(startupId: number): Promise<ProfileData | null> {
     try {
-      // Try the simple function first, then fall back to the full function
-      let { data, error } = await supabase
-        .rpc('get_startup_profile_simple', {
-          startup_id_param: startupId
-        });
-
-      if (error) {
-        // Fall back to the full function
-        const { data: fullData, error: fullError } = await supabase
-          .rpc('get_startup_profile', {
-            startup_id_param: startupId
-          });
-        
-        if (fullError) throw fullError;
-        data = fullData;
-      }
+      console.log('🔍 getStartupProfile called with startupId:', startupId);
       
-      if (!data) return null;
+      // Fetch startup data directly from startups table
+      const { data: startupData, error: startupError } = await supabase
+        .from('startups')
+        .select('*')
+        .eq('id', startupId)
+        .single();
 
-      // Normalize dates to YYYY-MM-DD and map snake_case -> camelCase
+      if (startupError) {
+        console.error('❌ Error fetching startup data:', startupError);
+        throw startupError;
+      }
+
+      if (!startupData) {
+        console.log('❌ No startup data found for ID:', startupId);
+        return null;
+      }
+
+      console.log('🔍 Raw startup data from database:', startupData);
+      
+      // All profile data is now stored in the startups table
+      console.log('🔍 All profile data is now stored in startups table');
+
+      // Fetch subsidiaries data
+      const { data: subsidiariesData, error: subsidiariesError } = await supabase
+        .from('subsidiaries')
+        .select('*')
+        .eq('startup_id', startupId);
+
+      if (subsidiariesError) {
+        console.error('❌ Error fetching subsidiaries:', subsidiariesError);
+      }
+
+      // Fetch international operations data (table may not exist)
+      let internationalOpsData = null;
+      try {
+        const { data, error: internationalOpsError } = await supabase
+          .from('international_operations')
+          .select('*')
+          .eq('startup_id', startupId);
+
+        if (internationalOpsError) {
+          // Only log if it's not a "table doesn't exist" error
+          if (internationalOpsError.code !== 'PGRST116' && internationalOpsError.message !== 'relation "public.international_operations" does not exist') {
+            console.log('🔍 International operations table error:', internationalOpsError);
+          }
+        } else {
+          internationalOpsData = data;
+        }
+      } catch (error) {
+        // Silently handle table not existing
+        console.log('🔍 International operations table not available, skipping');
+      }
+
+      // Normalize dates to YYYY-MM-DD
       const normalizeDate = (value: unknown): string => {
         if (!value) return '';
         if (value instanceof Date) return value.toISOString().split('T')[0];
@@ -71,37 +107,47 @@ export const profileService = {
         return str.includes('T') ? str.split('T')[0] : str;
       };
 
-      const normalizedSubsidiaries: Subsidiary[] = (data.subsidiaries || []).map((sub: any) => ({
+      // Map subsidiaries data
+      const normalizedSubsidiaries: Subsidiary[] = (subsidiariesData || []).map((sub: any) => ({
         id: sub.id,
         country: sub.country,
-        companyType: sub.companyType ?? sub.company_type,
-        registrationDate: normalizeDate(sub.registrationDate ?? sub.registration_date),
-        caCode: sub.caCode ?? sub.ca_service_code ?? undefined,
-        csCode: sub.csCode ?? sub.cs_service_code ?? undefined,
+        companyType: sub.company_type,
+        registrationDate: normalizeDate(sub.registration_date),
+        caCode: sub.ca_service_code,
+        csCode: sub.cs_service_code,
       }));
 
-      const normalizedInternationalOps: InternationalOp[] = (data.international_ops || []).map((op: any) => ({
+      // Map international operations data
+      const normalizedInternationalOps: InternationalOp[] = (internationalOpsData || []).map((op: any) => ({
         id: op.id,
         country: op.country,
-        startDate: normalizeDate(op.startDate ?? op.start_date),
+        companyType: op.company_type,
+        startDate: normalizeDate(op.start_date),
       }));
 
-      return {
-        country: data.startup.country_of_registration,
-        companyType: data.startup.company_type,
-        registrationDate: normalizeDate(data.startup.registration_date),
+      const finalProfileData = {
+        country: startupData.country_of_registration || startupData.country,
+        companyType: startupData.company_type,
+        registrationDate: normalizeDate(startupData.registration_date),
+        currency: startupData.currency || 'USD',
         subsidiaries: normalizedSubsidiaries,
         internationalOps: normalizedInternationalOps,
-        caServiceCode: data.startup.ca_service_code,
-        csServiceCode: data.startup.cs_service_code
+        caServiceCode: startupData.ca_service_code,
+        csServiceCode: startupData.cs_service_code,
+        investmentAdvisorCode: startupData.investment_advisor_code
       };
+
+      console.log('🔍 Processed profile data:', finalProfileData);
+      console.log('🔍 company_type from database:', startupData.company_type);
+      console.log('🔍 companyType in profileData:', finalProfileData.companyType);
+      return finalProfileData;
     } catch (error) {
-      console.error('Error fetching startup profile:', error);
+      console.error('❌ Error fetching startup profile:', error);
       return null;
     }
   },
 
-  // Update startup profile
+  // Update startup profile - Simplified version using direct database updates
   async updateStartupProfile(
     startupId: number,
     profileData: Partial<ProfileData>
@@ -109,68 +155,88 @@ export const profileService = {
     try {
       console.log('🔍 updateStartupProfile called with:', { startupId, profileData });
       
-      // Try the simple function first, then fall back to the full function
-      // Ensure we write CA/CS service codes
-      let { data, error } = await supabase
-        .rpc('update_startup_profile_simple', {
-          startup_id_param: startupId,
-          country_param: profileData.country || '',
-          company_type_param: profileData.companyType || '',
-          registration_date_param: profileData.registrationDate || null,
-          ca_service_code_param: (profileData.caServiceCode || (profileData as any).caCode) || null,
-          cs_service_code_param: (profileData.csServiceCode || (profileData as any).csCode) || null
-        });
-
-      console.log('🔍 Simple function result:', { data, error });
-
-      if (error) {
-        console.log('🔍 Simple function failed, trying full function...');
-        // Fall back to the full function
-        const { data: fullData, error: fullError } = await supabase
-          .rpc('update_startup_profile', {
-            startup_id_param: startupId,
-            country_param: profileData.country || '',
-            company_type_param: profileData.companyType || '',
-            registration_date_param: profileData.registrationDate || null,
-            ca_service_code_param: (profileData.caServiceCode || (profileData as any).caCode) || null,
-            cs_service_code_param: (profileData.csServiceCode || (profileData as any).csCode) || null
-          });
-        
-        console.log('🔍 Full function result:', { data: fullData, error: fullError });
-        
-        if (fullError) throw fullError;
-        data = fullData;
+      // Use direct database update instead of RPC functions for better reliability
+      const updateData: any = {
+        updated_at: new Date().toISOString(),
+      };
+      
+      // Add fields - include them even if empty to allow clearing values
+      if (profileData.country !== undefined && profileData.country !== null) {
+        updateData.country_of_registration = profileData.country;
+      }
+      if (profileData.companyType !== undefined && profileData.companyType !== null) {
+        updateData.company_type = profileData.companyType;
+        console.log('🔍 Adding company_type to update:', profileData.companyType, 'type:', typeof profileData.companyType);
       } else {
-        // Treat success (even if data is false/no-op) as success
-        return true;
+        console.log('🔍 Company type not being saved - value:', profileData.companyType, 'type:', typeof profileData.companyType);
       }
-
-      // As a final safety, if RPC path failed to update (data is falsy), attempt direct update
-      if (!data) {
-        const { error: directError } = await supabase
+      if (profileData.registrationDate !== undefined && profileData.registrationDate !== null) {
+        updateData.registration_date = profileData.registrationDate;
+      }
+      // Always include currency if it's provided (even if empty string)
+      if (profileData.currency !== undefined && profileData.currency !== null) {
+        updateData.currency = profileData.currency;
+        console.log('🔍 Adding currency to update:', profileData.currency);
+      }
+      if (profileData.caServiceCode || (profileData as any).caCode) {
+        updateData.ca_service_code = profileData.caServiceCode || (profileData as any).caCode;
+      }
+      if (profileData.csServiceCode || (profileData as any).csCode) {
+        updateData.cs_service_code = profileData.csServiceCode || (profileData as any).csCode;
+      }
+      if (profileData.investmentAdvisorCode !== undefined && profileData.investmentAdvisorCode !== null) {
+        updateData.investment_advisor_code = profileData.investmentAdvisorCode;
+        console.log('🔍 Adding investment_advisor_code to update:', profileData.investmentAdvisorCode);
+      }
+      
+      console.log('🔍 Update data:', updateData);
+      
+      const { error, data } = await supabase
+        .from('startups')
+        .update(updateData)
+        .eq('id', startupId)
+        .select();
+      
+      console.log('🔍 Database update result:', { error, data });
+      
+      if (error) {
+        console.error('❌ Direct update failed:', error);
+        
+        // If currency column doesn't exist, try without it
+        if (error.message.includes('currency') && updateData.currency) {
+          console.log('🔍 Retrying without currency column...');
+          delete updateData.currency;
+          const { error: retryError } = await supabase
           .from('startups')
-          .update({
-            country_of_registration: profileData.country || null,
-            company_type: profileData.companyType || null,
-            registration_date: profileData.registrationDate || null,
-            ca_service_code: (profileData.caServiceCode || (profileData as any).caCode) || null,
-            cs_service_code: (profileData.csServiceCode || (profileData as any).csCode) || null,
-            updated_at: new Date().toISOString(),
-          })
+            .update(updateData)
           .eq('id', startupId);
-        if (directError) {
-          console.error('❌ Direct update on startups failed due to RLS/policy:', directError);
-          return false;
-        }
-        console.log('🔍 Direct update on startups succeeded');
+          if (retryError) {
+            console.error('❌ Retry without currency failed:', retryError);
+            throw new Error(`Database update failed: ${retryError.message}`);
+          }
+          console.log('🔍 Update succeeded without currency column');
         return true;
       }
 
-      console.log('🔍 Final update result:', data);
+        throw new Error(`Database update failed: ${error.message}`);
+      }
+      
+      console.log('✅ Profile update successful');
       return true;
+      
     } catch (error) {
       console.error('❌ Error updating startup profile:', error);
-      return false;
+      if (error instanceof Error) {
+        console.error('❌ Error details:', {
+          message: error.message,
+          stack: error.stack,
+          startupId,
+          profileData
+        });
+        // Re-throw with more context
+        throw new Error(`Failed to update startup profile: ${error.message}`);
+      }
+      throw new Error('Failed to update startup profile: Unknown error');
     }
   },
 
@@ -186,36 +252,24 @@ export const profileService = {
     try {
       console.log('🔍 addSubsidiary called with:', { startupId, subsidiary });
       
-      // Try the simple function first, then fall back to the full function
-      let { data, error } = await supabase
-        .rpc('add_subsidiary_simple', {
-          startup_id_param: startupId,
-          country_param: subsidiary.country,
-          company_type_param: subsidiary.companyType,
-          registration_date_param: subsidiary.registrationDate
-        });
+      // Use direct database insert instead of RPC to avoid function overloading conflicts
+      const { data, error } = await supabase
+        .from('subsidiaries')
+        .insert({
+          startup_id: startupId,
+          country: subsidiary.country,
+          company_type: subsidiary.companyType,
+          registration_date: subsidiary.registrationDate,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .select('id')
+        .single();
 
-      console.log('🔍 Simple add_subsidiary result:', { data, error });
+      console.log('🔍 Direct add_subsidiary result:', { data, error });
 
-      if (error) {
-        console.log('🔍 Simple function failed, trying full function...');
-        // Fall back to the full function
-        const { data: fullData, error: fullError } = await supabase
-          .rpc('add_subsidiary', {
-            startup_id_param: startupId,
-            country_param: subsidiary.country,
-            company_type_param: subsidiary.companyType,
-            registration_date_param: subsidiary.registrationDate
-          });
-        
-        console.log('🔍 Full add_subsidiary result:', { data: fullData, error: fullError });
-        
-        if (fullError) throw fullError;
-        data = fullData;
-      }
-
-      console.log('🔍 Final addSubsidiary result:', data);
-      return data;
+      if (error) throw error;
+      return data?.id || null;
     } catch (error) {
       console.error('❌ Error adding subsidiary:', error);
       return null;
@@ -231,35 +285,40 @@ export const profileService = {
       console.log('🔍 updateSubsidiary called with:', { subsidiaryId, subsidiary });
       
       // Ensure registration date is in the correct format
-      let registrationDate: string | null = (subsidiary.registrationDate as unknown as string) || null;
-      if (registrationDate && typeof registrationDate === 'string') {
-        // Handle different date formats
-        const date = new Date(registrationDate);
+      let dateString: string | null = null;
+      
+      if (subsidiary.registrationDate) {
+        try {
+          const date = new Date(subsidiary.registrationDate);
         if (!isNaN(date.getTime())) {
-          // Convert to YYYY-MM-DD format for PostgreSQL
-          registrationDate = date.toISOString().split('T')[0];
+            dateString = date.toISOString().split('T')[0];
         } else {
-          console.error('❌ Invalid date format:', registrationDate);
+            console.error('❌ Invalid date format:', subsidiary.registrationDate);
           return false;
         }
-      } else if (registrationDate && typeof registrationDate === 'object' && 'toISOString' in (registrationDate as any)) {
-        registrationDate = ((registrationDate as unknown) as Date).toISOString().split('T')[0];
+        } catch (error) {
+          console.error('❌ Error processing date:', error);
+          return false;
+        }
       }
       
-      console.log('🔍 Processed registration date:', registrationDate);
+      console.log('🔍 Processed registration date:', dateString);
       
-      const { data, error } = await supabase
-        .rpc('update_subsidiary', {
-          subsidiary_id_param: subsidiaryId,
-          country_param: subsidiary.country,
-          company_type_param: subsidiary.companyType,
-          registration_date_param: registrationDate
-        });
+      // Use direct database update instead of RPC to avoid function overloading conflicts
+      const { error } = await supabase
+        .from('subsidiaries')
+        .update({
+          country: subsidiary.country,
+          company_type: subsidiary.companyType,
+          registration_date: dateString,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', subsidiaryId);
 
-      console.log('🔍 update_subsidiary result:', { data, error });
+      console.log('🔍 Direct subsidiary update result:', { error });
 
       if (error) throw error;
-      return data;
+      return true;
     } catch (error) {
       console.error('❌ Error updating subsidiary:', error);
       return false;
@@ -271,15 +330,16 @@ export const profileService = {
     try {
       console.log('🔍 deleteSubsidiary called with ID:', subsidiaryId);
       
-      const { data, error } = await supabase
-        .rpc('delete_subsidiary', {
-          subsidiary_id_param: subsidiaryId
-        });
+      // Use direct database delete instead of RPC to avoid function overloading conflicts
+      const { error } = await supabase
+        .from('subsidiaries')
+        .delete()
+        .eq('id', subsidiaryId);
 
-      console.log('🔍 delete_subsidiary result:', { data, error });
+      console.log('🔍 Direct delete_subsidiary result:', { error });
 
       if (error) throw error;
-      return data;
+      return true;
     } catch (error) {
       console.error('❌ Error deleting subsidiary:', error);
       return false;
@@ -296,27 +356,16 @@ export const profileService = {
     operation: Omit<InternationalOp, 'id'>
   ): Promise<number | null> {
     try {
-      // Try the simple function first, then fall back to the full function
-      let { data, error } = await supabase
-        .rpc('add_international_op_simple', {
+      // Use the full function with company_type
+      const { data, error } = await supabase
+        .rpc('add_international_op', {
           startup_id_param: startupId,
           country_param: operation.country,
+          company_type_param: operation.companyType || 'default',
           start_date_param: operation.startDate
         });
 
-      if (error) {
-        // Fall back to the full function
-        const { data: fullData, error: fullError } = await supabase
-          .rpc('add_international_op', {
-            startup_id_param: startupId,
-            country_param: operation.country,
-            start_date_param: operation.startDate
-          });
-        
-        if (fullError) throw fullError;
-        data = fullData;
-      }
-
+      if (error) throw error;
       return data;
     } catch (error) {
       console.error('Error adding international operation:', error);
@@ -354,6 +403,7 @@ export const profileService = {
         .rpc('update_international_op', {
           op_id_param: opId,
           country_param: operation.country,
+          company_type_param: operation.companyType || 'default',
           start_date_param: startDate
         });
 
@@ -588,16 +638,8 @@ export const profileService = {
   validateProfileData(profile: Partial<ProfileData>): { isValid: boolean; errors: string[] } {
     const errors: string[] = [];
 
-    if (profile.country && !this.getAllCountries().includes(profile.country)) {
-      errors.push('Invalid country selected');
-    }
-
-    if (profile.companyType && profile.country) {
-      const validTypes = this.getCompanyTypesByCountry(profile.country);
-      if (!validTypes.includes(profile.companyType)) {
-        errors.push('Invalid company type for selected country');
-      }
-    }
+    // Country and company type are now constrained by admin-managed rules
+    // via DB-driven dropdowns, so we skip hardcoded validation here.
 
     if (profile.registrationDate) {
       const date = new Date(profile.registrationDate);
@@ -613,15 +655,7 @@ export const profileService = {
     // Validate subsidiaries
     if (Array.isArray(profile.subsidiaries)) {
       for (const sub of profile.subsidiaries) {
-        if (sub.country && !this.getAllCountries().includes(sub.country)) {
-          errors.push(`Invalid subsidiary country: ${sub.country}`);
-        }
-        if (sub.companyType && sub.country) {
-          const valid = this.getCompanyTypesByCountry(sub.country);
-          if (!valid.includes(sub.companyType)) {
-            errors.push(`Invalid company type for subsidiary country ${sub.country}`);
-          }
-        }
+        // Country/company type validity enforced by DB-driven dropdowns
         if (sub.registrationDate) {
           const subDate = new Date(sub.registrationDate);
           if (isNaN(subDate.getTime())) {
@@ -637,9 +671,7 @@ export const profileService = {
     // Validate international operations
     if (Array.isArray(profile.internationalOps)) {
       for (const op of profile.internationalOps) {
-        if (op.country && !this.getAllCountries().includes(op.country)) {
-          errors.push(`Invalid international operation country: ${op.country}`);
-        }
+        // Country validity enforced by DB-driven dropdowns
         if (op.startDate) {
           const opDate = new Date(op.startDate);
           if (isNaN(opDate.getTime())) {
@@ -814,50 +846,9 @@ export const profileService = {
   // Sync compliance tasks with database
   async syncComplianceTasks(startupId: number): Promise<boolean> {
     try {
-      console.log('🔍 Syncing compliance tasks for startup:', startupId);
-      
-      const tasks = await this.generateComplianceTasks(startupId);
-      
-      // Clear existing tasks for this startup
-      const { error: deleteError } = await supabase
-        .from('compliance_checks')
-        .delete()
-        .eq('startup_id', startupId);
-      
-      if (deleteError) {
-        console.error('Error clearing existing compliance tasks:', deleteError);
-        throw deleteError;
-      }
-      
-      // Insert new tasks
-      if (tasks.length > 0) {
-        const taskRecords = tasks.map(task => ({
-          startup_id: startupId,
-          task_id: task.task_id,
-          entity_identifier: task.entity_identifier,
-          entity_display_name: task.entity_display_name,
-          year: task.year,
-          task_name: task.task_name,
-          ca_required: task.ca_required,
-          cs_required: task.cs_required,
-          task_type: task.task_type,
-          ca_status: 'Pending',
-          cs_status: 'Pending'
-        }));
-        
-        console.log('🔍 Inserting compliance task records:', taskRecords);
-        
-        const { error: insertError } = await supabase
-          .from('compliance_checks')
-          .insert(taskRecords);
-        
-        if (insertError) {
-          console.error('Error inserting compliance tasks:', insertError);
-          throw insertError;
-        }
-      }
-      
-      console.log('🔍 Compliance tasks synced successfully');
+      console.log('🔍 Compliance task syncing disabled - using database function directly');
+      // Note: Compliance tasks are now generated dynamically by the database function
+      // No need to sync to compliance_checks table
       return true;
     } catch (error) {
       console.error('Error syncing compliance tasks:', error);

@@ -17,20 +17,249 @@ const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigateToLogin
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isSessionReady, setIsSessionReady] = useState(false);
   const [validationErrors, setValidationErrors] = useState<{
     password?: string;
     confirmPassword?: string;
   }>({});
 
-  // Check if we have the necessary tokens from URL
+  // Check if we have the necessary tokens from URL and handle Supabase session
   useEffect(() => {
+    const handleResetPasswordSession = async () => {
+      console.log('=== RESET PASSWORD SESSION DEBUG ===');
+      console.log('Full URL:', window.location.href);
+      console.log('Pathname:', window.location.pathname);
+      console.log('Search params:', window.location.search);
+      console.log('Hash:', window.location.hash);
+      
     const searchParams = new URLSearchParams(window.location.search);
-    const accessToken = searchParams.get('access_token');
-    const refreshToken = searchParams.get('refresh_token');
-    
-    if (!accessToken && !refreshToken) {
+      const hash = window.location.hash;
+      
+      // Check for tokens in URL parameters or hash
+      const accessToken = searchParams.get('access_token') || 
+                         (hash.includes('access_token=') ? hash.split('access_token=')[1]?.split('&')[0] : null);
+      const refreshToken = searchParams.get('refresh_token') || 
+                          (hash.includes('refresh_token=') ? hash.split('refresh_token=')[1]?.split('&')[0] : null);
+      
+      // Check for code parameter (alternative Supabase flow)
+      const code = searchParams.get('code') || (hash.includes('code=') ? hash.split('code=')[1]?.split('&')[0] : null);
+      
+      // Check for PKCE token in URL (newer Supabase flow)
+      const pkceToken = searchParams.get('token') || (hash.includes('token=') ? hash.split('token=')[1]?.split('&')[0] : null);
+      
+      // Also check for type parameter (Supabase sometimes uses this)
+      const type = searchParams.get('type') || (hash.includes('type=') ? hash.split('type=')[1]?.split('&')[0] : null);
+      
+      console.log('Token extraction results:', { 
+        accessToken: accessToken ? `${accessToken.substring(0, 20)}...` : null,
+        refreshToken: refreshToken ? `${refreshToken.substring(0, 20)}...` : null,
+        code: code ? `${code.substring(0, 20)}...` : null,
+        pkceToken: pkceToken ? `${pkceToken.substring(0, 20)}...` : null,
+        type: type,
+        hasAccessToken: !!accessToken,
+        hasRefreshToken: !!refreshToken,
+        hasCode: !!code,
+        hasPkceToken: !!pkceToken
+      });
+      
+      if (accessToken && refreshToken) {
+        try {
+          console.log('Setting session with tokens...');
+          // Set the session using Supabase
+          const { data, error } = await authService.supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken
+          });
+          
+          if (error) {
+            console.error('Error setting reset password session:', error);
+            setError(`Invalid or expired reset link: ${error.message}`);
+          } else {
+            console.log('Reset password session established successfully:', data);
+            setIsSessionReady(true);
+            // Clean up URL
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+        } catch (err) {
+          console.error('Error handling reset password session:', err);
+          setError(`Invalid or expired reset link: ${err.message}`);
+        }
+      } else if (pkceToken) {
+        // Handle PKCE token (newest Supabase flow)
+        console.log('Found PKCE token, attempting to verify OTP...');
+        try {
+          // Try multiple approaches for PKCE token verification
+          let verificationSuccess = false;
+          
+          // Approach 1: Try verifyOtp with token_hash
+          try {
+            const { data, error } = await authService.supabase.auth.verifyOtp({
+              token_hash: pkceToken,
+              type: 'recovery'
+            });
+            
+            if (!error && data) {
+              console.log('PKCE OTP verified successfully with token_hash:', data);
+              setIsSessionReady(true);
+              verificationSuccess = true;
+              // Clean up URL
+              window.history.replaceState({}, document.title, window.location.pathname);
+            } else {
+              console.log('PKCE token_hash approach failed:', error);
+            }
+          } catch (err) {
+            console.log('PKCE token_hash approach error:', err);
+          }
+          
+          // Approach 2: Try verifyOtp with token (requires email, so skip for now)
+          if (!verificationSuccess) {
+            console.log('Skipping PKCE token approach (requires email), trying other methods...');
+          }
+          
+          if (!verificationSuccess) {
+            console.log('All PKCE verification approaches failed - the reset link is invalid or expired');
+            setError('Invalid or expired reset link. Please request a new password reset.');
+            return;
+          }
+          
+        } catch (err) {
+          console.error('Error handling PKCE token verification:', err);
+          setError(`Invalid or expired reset link: ${err.message}`);
+        }
+      } else if (code) {
+        // Handle code-based authentication (newer Supabase flow)
+        console.log('Found code parameter, attempting to verify OTP...');
+        try {
+          // Try multiple approaches for password reset verification
+          let verificationSuccess = false;
+          
+          // Approach 1: Try verifyOtp with token_hash
+          try {
+            const { data, error } = await authService.supabase.auth.verifyOtp({
+              token_hash: code,
+              type: 'recovery'
+            });
+            
+            if (!error && data) {
+              console.log('OTP verified successfully with token_hash:', data);
+              setIsSessionReady(true);
+              verificationSuccess = true;
+              // Clean up URL
+              window.history.replaceState({}, document.title, window.location.pathname);
+            } else {
+              console.log('token_hash approach failed:', error);
+            }
+          } catch (err) {
+            console.log('token_hash approach error:', err);
+          }
+          
+          // Approach 1.5: Try verifyOtp with just the code as token (requires email, so skip for now)
+          if (!verificationSuccess) {
+            console.log('Skipping token approach (requires email), trying other methods...');
+          }
+          
+          // Approach 2: Try verifyOtp with email and token (if approach 1 failed)
+          if (!verificationSuccess) {
+            try {
+              // We need to get the email from somewhere - let's try a different approach
+              // For now, let's skip this approach and go to the next one
+              console.log('Skipping token approach, trying exchangeCodeForSession...');
+            } catch (err) {
+              console.log('token approach error:', err);
+            }
+          }
+          
+          // Approach 3: Try exchangeCodeForSession (if both above failed)
+          if (!verificationSuccess) {
+            try {
+              const { data, error } = await authService.supabase.auth.exchangeCodeForSession(code);
+              
+              if (!error && data) {
+                console.log('Code exchanged for session successfully:', data);
+                setIsSessionReady(true);
+                verificationSuccess = true;
+                // Clean up URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+              } else {
+                console.log('exchangeCodeForSession failed:', error);
+              }
+            } catch (err) {
+              console.log('exchangeCodeForSession error:', err);
+            }
+          }
+          
+          // Approach 4: Try to get user info directly (some setups allow this)
+          if (!verificationSuccess) {
+            try {
+              // Try to get the current user - sometimes the code automatically establishes a session
+              const { data: { user }, error } = await authService.supabase.auth.getUser();
+              if (user && !error) {
+                console.log('User session found after code processing:', user.email);
+                setIsSessionReady(true);
+                verificationSuccess = true;
+              } else {
+                console.log('No user session found after code processing:', error);
+              }
+            } catch (err) {
+              console.log('Error getting user after code processing:', err);
+            }
+          }
+          
+          // Approach 5: If all else fails, don't proceed - the code is invalid
+          if (!verificationSuccess) {
+            console.log('All verification approaches failed - the reset link is invalid or expired');
+            setError('Invalid or expired reset link. Please request a new password reset.');
+            return; // Don't set session ready
+          }
+          
+          if (!verificationSuccess) {
+            setError('Invalid or expired reset link. Please request a new password reset.');
+          }
+          
+        } catch (err) {
+          console.error('Error handling code verification:', err);
+          setError(`Invalid or expired reset link: ${err.message}`);
+        }
+      } else if (type === 'recovery') {
+        // Handle recovery type links (alternative Supabase format)
+        console.log('Found recovery type link, attempting to handle...');
+        try {
+          // Try to get the current session
+          const { data: { session }, error } = await authService.supabase.auth.getSession();
+          if (session && !error) {
+            console.log('Recovery session found:', session.user.email);
+            setIsSessionReady(true);
+          } else {
+            console.log('No recovery session found:', error);
+            setError('Invalid or expired reset link. Please request a new password reset.');
+          }
+        } catch (err) {
+          console.error('Error handling recovery session:', err);
+          setError('Invalid or expired reset link. Please request a new password reset.');
+        }
+      } else {
+        // Check if user is already authenticated (might be from a previous session)
+        console.log('No tokens found, checking existing session...');
+        const { data: { user }, error: userError } = await authService.supabase.auth.getUser();
+        if (userError || !user) {
+          console.log('No existing session found:', userError);
+          
+          // Try one more approach - check if we can detect this as a password reset context
+          // Sometimes Supabase redirects without tokens but with a specific path
+          if (window.location.pathname === '/reset-password') {
+            console.log('Reset password path detected, but no tokens. This might be a Supabase configuration issue.');
+            setError('Password reset link configuration issue. Please check your Supabase settings and try requesting a new reset link.');
+          } else {
       setError('Invalid or expired reset link. Please request a new password reset.');
     }
+        } else {
+          console.log('Existing session found for user:', user.email);
+          setIsSessionReady(true);
+        }
+      }
+    };
+
+    handleResetPasswordSession();
   }, []);
 
   const validatePassword = (password: string): string | null => {
@@ -76,16 +305,37 @@ const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigateToLogin
     setError(null);
 
     try {
+      console.log('Attempting password reset...');
+      
+      // First, let's try the standard approach
       const { success, error: resetError } = await authService.resetPassword(newPassword);
       
       if (success) {
+        console.log('Password reset successful');
         setIsSuccess(true);
         // Redirect to login after 3 seconds
         setTimeout(() => {
           onNavigateToLogin();
         }, 3000);
       } else {
-        setError(resetError || 'Failed to reset password. Please try again.');
+        console.error('Password reset failed:', resetError);
+        
+        // If standard approach fails, try alternative method
+        console.log('Trying alternative password reset method...');
+        const { data, error: altError } = await authService.supabase.auth.updateUser({
+          password: newPassword
+        });
+        
+        if (altError) {
+          console.error('Alternative method also failed:', altError);
+          setError(resetError || altError.message || 'Failed to reset password. Please try again.');
+        } else {
+          console.log('Alternative method succeeded');
+          setIsSuccess(true);
+          setTimeout(() => {
+            onNavigateToLogin();
+          }, 3000);
+        }
       }
     } catch (err: any) {
       console.error('Password reset error:', err);
@@ -136,6 +386,27 @@ const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigateToLogin
     );
   }
 
+  // Show loading state while establishing session
+  if (!isSessionReady && !error) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
+        <Card className="w-full max-w-md text-center">
+          <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 mb-4">
+            <Loader2 className="h-6 w-6 text-blue-600 animate-spin" />
+          </div>
+          
+          <h2 className="text-2xl font-bold text-slate-900 mb-2">
+            Preparing Reset
+          </h2>
+          
+          <p className="text-slate-600">
+            Setting up your password reset session...
+          </p>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
       <Card className="w-full max-w-md">
@@ -154,6 +425,21 @@ const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigateToLogin
             <div className="flex items-center gap-2">
               <AlertCircle className="h-4 w-4 text-red-600" />
               <p className="text-red-800 text-sm">{error}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Debug Information - Remove in production */}
+        {process.env.NODE_ENV === 'development' && (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-md p-3 mb-6">
+            <h4 className="font-medium text-yellow-900 mb-2">Debug Info:</h4>
+            <div className="text-xs text-yellow-800 space-y-1">
+              <p>URL: {window.location.href}</p>
+              <p>Session Ready: {isSessionReady ? 'Yes' : 'No'}</p>
+              <p>Has Tokens: {window.location.search.includes('access_token') ? 'Yes' : 'No'}</p>
+              <p>Has Code: {window.location.search.includes('code=') ? 'Yes' : 'No'}</p>
+              <p>Has PKCE Token: {window.location.search.includes('token=') ? 'Yes' : 'No'}</p>
+              <p>Type: {new URLSearchParams(window.location.search).get('type') || 'None'}</p>
             </div>
           </div>
         )}
@@ -244,13 +530,15 @@ const ResetPasswordPage: React.FC<ResetPasswordPageProps> = ({ onNavigateToLogin
             <Button
               type="submit"
               className="flex-1"
-              disabled={isLoading || !newPassword.trim() || !confirmPassword.trim()}
+              disabled={isLoading || !newPassword.trim() || !confirmPassword.trim() || !isSessionReady}
             >
               {isLoading ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Resetting...
                 </>
+              ) : !isSessionReady ? (
+                'Preparing...'
               ) : (
                 'Reset Password'
               )}

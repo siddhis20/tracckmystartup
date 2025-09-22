@@ -1,17 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Startup, Subsidiary, InternationalOp, ProfileData, ServiceProvider } from '../../types';
 import { profileService, ProfileNotification } from '../../lib/profileService';
+import { complianceRulesComprehensiveService } from '../../lib/complianceRulesComprehensiveService';
+import { authService } from '../../lib/auth';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import Select from '../ui/Select';
 import { Plus, Trash2, Edit3, Save, X, Bell, UserCheck, ShieldCheck, Download } from 'lucide-react';
+import { getCurrencyForCountryCode } from '../../lib/utils';
 
 interface ProfileTabProps {
   startup: Startup;
   userRole?: string;
   onProfileUpdate?: (startup: Startup) => void;
   isViewOnly?: boolean;
+  currentUser?: any; // Add current user prop
 }
 
 type LocalSubsidiary = Subsidiary & { 
@@ -27,12 +31,13 @@ type LocalFormData = Omit<ProfileData, 'subsidiaries'> & {
   csCode?: string;
   ca?: ServiceProvider;
   cs?: ServiceProvider;
+  currency?: string;
 };
 
 const FormInput: React.FC<React.InputHTMLAttributes<HTMLInputElement> & { label: string }> = ({ label, ...props }) => (
   <div>
     <label className="block text-sm font-medium text-slate-700 mb-1">{label}</label>
-    <input {...props} className="w-full bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed" />
+    <input {...props} className="w-full bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-90 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-700" />
   </div>
 );
 
@@ -92,7 +97,7 @@ const ServiceCodeInput: React.FC<{
 const FormSelect: React.FC<React.SelectHTMLAttributes<HTMLSelectElement> & { label: string; children: React.ReactNode }> = ({ label, children, ...props }) => (
   <div>
     <label className="block text-sm font-medium text-slate-700 mb-1">{label}</label>
-    <select {...props} className="w-full bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed">
+    <select {...props} className="w-full bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-90 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-700">
       {children}
     </select>
   </div>
@@ -120,12 +125,16 @@ const ServiceProviderDisplay: React.FC<{
   </div>
 );
 
-const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpdate, isViewOnly = false }) => {
+const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpdate, isViewOnly = false, currentUser }) => {
       const [isEditing, setIsEditing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [notifications, setNotifications] = useState<ProfileNotification[]>([]);
   const [csRequestLoading, setCsRequestLoading] = useState(false);
+  const [userProfile, setUserProfile] = useState<any>(null);
+  // DB-driven catalogs from compliance_rules
+  const [rulesMap, setRulesMap] = useState<any>({}); // { [country]: rulesJson }
+  const [allCountries, setAllCountries] = useState<string[]>([]);
   
   // Validation status for CA/CS codes
   const [caCodeValidation, setCaCodeValidation] = useState<{
@@ -148,21 +157,33 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
       cs: { isValid: boolean; isInvalid: boolean; isLoading: boolean; errorMessage: string; };
     };
   }>({});
+  // Track last entity-defining signature to prevent unnecessary compliance syncs
+  const lastEntitySignatureRef = useRef<string | null>(null);
+
+  const computeEntitySignature = (data: Partial<LocalFormData>): string => {
+    const signature = {
+      country: data.country || '',
+      companyType: data.companyType || '',
+      registrationDate: data.registrationDate || '',
+      subsidiaries: (data.subsidiaries || []).map(s => ({ country: s.country, companyType: s.companyType })),
+      internationalOps: (data.internationalOps || []).map(op => ({ country: op.country, companyType: op.companyType }))
+    };
+    return JSON.stringify(signature);
+  };
     // CA should have view-only access across tabs except compliance. No profile editing.
     const canEdit = (userRole === 'Startup' || userRole === 'Admin') && !isViewOnly;
     
     // Helper function to sanitize profile data and ensure all values are strings
     const sanitizeProfileData = (data: any): LocalFormData => {
-        console.log('🔍 Sanitizing profile data:', data);
-        
         const sanitized = {
-        country: data.country || 'United States',
-        companyType: data.companyType || 'C-Corporation',
+        country: data.country || '',
+        companyType: data.companyType || '',
         registrationDate: data.registrationDate || '',
+        currency: data.currency || 'USD',
         subsidiaries: (data.subsidiaries || []).map((sub: any) => ({
             id: sub.id || 0,
-            country: sub.country || 'United States',
-            companyType: sub.companyType || 'LLC',
+            country: sub.country || '', // Keep existing data, don't override with defaults
+            companyType: sub.companyType || '', // Keep existing data, don't override with defaults
                 registrationDate: sub.registrationDate || '',
                 caCode: sub.caCode || sub.ca_service_code || '',
                 csCode: sub.csCode || sub.cs_service_code || '',
@@ -171,7 +192,8 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
         })),
         internationalOps: (data.internationalOps || []).map((op: any) => ({
             id: op.id || 0,
-            country: op.country || 'Germany',
+            country: op.country || '', // Keep existing data, don't override with defaults
+            companyType: op.companyType || '', // Keep existing data, don't override with defaults
                 startDate: op.startDate || ''
             })),
             caServiceCode: data.caServiceCode || data.ca_service_code || '',
@@ -182,20 +204,56 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
             cs: data.cs || undefined,
         };
         
-        console.log('🔍 Sanitized profile data:', sanitized);
         return sanitized;
     };
     
-    // Real profile data from database
+    // Real profile data from database - initialize with empty values, will be loaded from profile
   const [formData, setFormData] = useState<LocalFormData>({
-        country: 'United States',
-        companyType: 'C-Corporation',
+        country: '',
+        companyType: '',
         registrationDate: startup.registrationDate || new Date().toISOString().split('T')[0],
     subsidiaries: [],
     internationalOps: [],
         caServiceCode: '',
         csServiceCode: '',
+        currency: 'USD',
     });
+
+    // Compute company types for the currently selected country from comprehensive compliance rules
+    const companyTypesByCountry = React.useMemo<string[]>(() => {
+        if (!formData.country) {
+            return [];
+        }
+        
+        // Find the country code for the selected country name
+        let countryCode = formData.country;
+        
+        // If formData.country is a country name (like "India"), find the corresponding country code
+        if (formData.country && !rulesMap[formData.country]) {
+            // Look for a country code that matches this country name
+            for (const [code, data] of Object.entries(rulesMap)) {
+                if (data.country_name === formData.country) {
+                    countryCode = code;
+                    break;
+                }
+            }
+        }
+        
+        // Get all company types for the selected country from comprehensive rules
+        const countryData = rulesMap[countryCode];
+        
+        if (!countryData || !countryData.company_types) {
+            return [];
+        }
+        
+        const companyTypes = Object.keys(countryData.company_types);
+        return companyTypes;
+    }, [rulesMap, formData.country]);
+
+    // Get available countries from comprehensive compliance rules
+    const availableCountries = React.useMemo<string[]>(() => {
+        return allCountries.filter(country => country !== 'default');
+    }, [allCountries]);
 
     // Load profile data
     useEffect(() => {
@@ -205,14 +263,134 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                 const profileData = await profileService.getStartupProfile(startup.id);
                 
                 if (profileData) {
+                    console.log('🔍 Raw profile data loaded:', profileData);
+                    console.log('🔍 Company type from database:', profileData.companyType);
                     // Sanitize profile data to ensure all values are properly initialized
                     const sanitizedData = sanitizeProfileData(profileData);
-          setFormData(sanitizedData);
+                    console.log('🔍 Sanitized data for form:', sanitizedData);
+                    console.log('🔍 Sanitized company type:', sanitizedData.companyType);
+                    
+                    // Convert country name to country code if needed
+                    if (sanitizedData.country && rulesMap && Object.keys(rulesMap).length > 0) {
+                        // If the country is a name (like "India"), find the corresponding country code
+                        if (!rulesMap[sanitizedData.country]) {
+                            for (const [code, data] of Object.entries(rulesMap)) {
+                                if (data.country_name === sanitizedData.country) {
+                                    sanitizedData.country = code;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    setFormData(sanitizedData);
+          // Initialize last entity signature on initial load
+          lastEntitySignatureRef.current = computeEntitySignature(sanitizedData);
+                }
+                
+                // Load user profile data to get verification documents
+                try {
+                    console.log('🔍 Starting user profile document fetch...');
+                    const { data: { user }, error: userError } = await authService.supabase.auth.getUser();
+                    
+                    if (userError) {
+                        console.error('❌ Auth error:', userError);
+                        return;
+                    }
+                    
+                    if (!user) {
+                        console.error('❌ No authenticated user found');
+                        return;
+                    }
+                    
+                    console.log('🔍 Authenticated user:', user.id, user.email);
+                    
+                    const { data: userProfiles, error: profileError } = await authService.supabase
+                        .from('users')
+                        .select('government_id, ca_license, verification_documents, logo_url, financial_advisor_license_url, investment_advisor_code')
+                        .eq('id', user.id);
+                    
+                    const userProfile = userProfiles && userProfiles.length > 0 ? userProfiles[0] : null;
+                    
+                    if (profileError) {
+                        console.error('❌ Profile fetch error:', profileError);
+                        return;
+                    }
+                    
+                    console.log('🔍 User profile documents loaded:', userProfile);
+                    
+                    if (userProfile) {
+                        // Store user profile data for document display
+                        setUserProfile(userProfile);
+                        console.log('✅ User profile state updated');
+                    } else {
+                        console.log('⚠️ No user profile data found');
+                    }
+                } catch (error) {
+                    console.error('❌ Error loading user profile documents:', error);
+                }
+                
+                // Fallback: Use currentUser data if available
+                if (!userProfile && currentUser) {
+                    console.log('🔄 Using currentUser data as fallback:', currentUser);
+                    const fallbackProfile = {
+                        government_id: currentUser.government_id,
+                        ca_license: currentUser.ca_license,
+                        verification_documents: currentUser.verification_documents,
+                        logo_url: currentUser.logo_url,
+                        financial_advisor_license_url: currentUser.financial_advisor_license_url,
+                        investment_advisor_code: currentUser.investment_advisor_code
+                    };
+                    setUserProfile(fallbackProfile);
+                    console.log('✅ Fallback user profile set:', fallbackProfile);
                 }
                 
                 // Load notifications
                 const profileNotifications = await profileService.getProfileNotifications(startup.id);
                 setNotifications(profileNotifications);
+
+                // Load admin-managed compliance rule catalogs for dropdowns
+                try {
+                    const rules = await complianceRulesComprehensiveService.getAllRules();
+                    const map: any = {};
+                    const countries = new Set<string>();
+                    
+                    rules.forEach(rule => {
+                        countries.add(rule.country_code);
+                        if (!map[rule.country_code]) {
+                            map[rule.country_code] = {
+                                country_name: rule.country_name,
+                                company_types: {}
+                            };
+                        }
+                        
+                        // Only process actual company types, not CA/CS types or setup entries
+                        const companyType = rule.company_type;
+                        if (companyType && 
+                            !companyType.toLowerCase().includes('setup') && 
+                            !companyType.toLowerCase().includes('ca type') && 
+                            !companyType.toLowerCase().includes('cs type') &&
+                            companyType !== rule.ca_type &&
+                            companyType !== rule.cs_type) {
+                            
+                            if (!map[rule.country_code].company_types[companyType]) {
+                                map[rule.country_code].company_types[companyType] = [];
+                            }
+                            map[rule.country_code].company_types[companyType].push({
+                                id: rule.id,
+                                name: rule.compliance_name,
+                                description: rule.compliance_description,
+                                frequency: rule.frequency,
+                                verification_required: rule.verification_required
+                            });
+                        }
+                    });
+                    
+                    setRulesMap(map);
+                    setAllCountries(Array.from(countries));
+                } catch (e) {
+                    console.warn('Failed to load compliance rules for dropdowns', e);
+                }
             } catch (error) {
                 console.error('Error loading profile data:', error);
             } finally {
@@ -222,6 +400,62 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
 
         loadProfileData();
     }, [startup.id]);
+
+    // Realtime: refresh catalogs when admin updates compliance_rules_comprehensive
+    useEffect(() => {
+        const channel = profileService.supabase
+            .channel('profile_rules_catalogs')
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'compliance_rules_comprehensive' },
+                async () => {
+                    try {
+                        const rules = await complianceRulesComprehensiveService.getAllRules();
+                        const map: any = {};
+                        const countries = new Set<string>();
+                        
+                        rules.forEach(rule => {
+                            countries.add(rule.country_code);
+                            if (!map[rule.country_code]) {
+                                map[rule.country_code] = {
+                                    country_name: rule.country_name,
+                                    company_types: {}
+                                };
+                            }
+                            
+                            // Only process actual company types, not CA/CS types or setup entries
+                            const companyType = rule.company_type;
+                            if (companyType && 
+                                !companyType.toLowerCase().includes('setup') && 
+                                !companyType.toLowerCase().includes('ca type') && 
+                                !companyType.toLowerCase().includes('cs type') &&
+                                companyType !== rule.ca_type &&
+                                companyType !== rule.cs_type) {
+                                
+                                if (!map[rule.country_code].company_types[companyType]) {
+                                    map[rule.country_code].company_types[companyType] = [];
+                                }
+                                map[rule.country_code].company_types[companyType].push({
+                                    id: rule.id,
+                                    name: rule.compliance_name,
+                                    description: rule.compliance_description,
+                                    frequency: rule.frequency,
+                                    verification_required: rule.verification_required
+                                });
+                            }
+                        });
+                        
+                        setRulesMap(map);
+                        setAllCountries(Array.from(countries));
+                    } catch (e) {
+                        console.warn('Failed to refresh compliance rules for dropdowns', e);
+                    }
+                }
+            )
+            .subscribe();
+
+        return () => { channel.unsubscribe(); };
+    }, []);
 
     // Real-time subscriptions - Simplified approach
     useEffect(() => {
@@ -244,6 +478,7 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                     profileService.getStartupProfile(startup.id).then(profileData => {
                         if (profileData) {
               setFormData(sanitizeProfileData(profileData));
+              lastEntitySignatureRef.current = computeEntitySignature(sanitizeProfileData(profileData));
                         }
                     });
                 }
@@ -262,6 +497,7 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                     profileService.getStartupProfile(startup.id).then(profileData => {
                         if (profileData) {
               setFormData(sanitizeProfileData(profileData));
+              lastEntitySignatureRef.current = computeEntitySignature(sanitizeProfileData(profileData));
                         }
                     });
                 }
@@ -280,6 +516,7 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                     profileService.getStartupProfile(startup.id).then(profileData => {
                         if (profileData) {
               setFormData(sanitizeProfileData(profileData));
+              lastEntitySignatureRef.current = computeEntitySignature(sanitizeProfileData(profileData));
                         }
                     });
                 }
@@ -292,14 +529,28 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
         };
     }, [startup.id]);
 
-    // Get dynamic data
-  const companyTypesByCountry = profileService.getCompanyTypesByCountry(formData.country, startup.sector);
-    const allCountries = profileService.getAllCountries();
+    // Convert country name to country code when rulesMap is loaded
+    React.useEffect(() => {
+        if (formData.country && rulesMap && Object.keys(rulesMap).length > 0) {
+            // If the country is a name (like "India"), find the corresponding country code
+            if (!rulesMap[formData.country]) {
+                for (const [code, data] of Object.entries(rulesMap)) {
+                    if (data.country_name === formData.country) {
+                        setFormData(prev => ({
+                            ...prev,
+                            country: code
+                        }));
+                        break;
+                    }
+                }
+            }
+        }
+    }, [formData.country, rulesMap]);
 
     // Auto-fix invalid company types when profile loads
     React.useEffect(() => {
-    if (formData.country && formData.companyType) {
-      const validTypes = profileService.getCompanyTypesByCountry(formData.country);
+    if (formData.country && formData.companyType && companyTypesByCountry.length > 0) {
+      const validTypes = companyTypesByCountry;
       if (!validTypes.includes(formData.companyType)) {
         console.log(`🔧 Auto-fixing invalid company type: ${formData.companyType} -> ${validTypes[0]} for country: ${formData.country}`);
         setFormData(prev => ({
@@ -308,7 +559,7 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                 }));
             }
         }
-  }, [formData.country, formData.companyType]);
+  }, [formData.country, formData.companyType, companyTypesByCountry]);
 
   const handleEdit = () => setIsEditing(true);
 
@@ -324,8 +575,6 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
 
     const handleSave = async () => {
         try {
-            console.log('🔍 Starting save process...');
-            console.log('🔍 Profile data to save:', formData);
             
             // First validate basic profile data
             const validation = profileService.validateProfileData(formData);
@@ -344,7 +593,6 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
             }
 
             // Then validate CA/CS service codes against backend
-            console.log('🔍 Validating CA/CS service codes...');
             const serviceCodeValidation = await profileService.validateServiceCodes(formData);
             if (!serviceCodeValidation.isValid) {
                 const errorMessage = serviceCodeValidation.errors.join('\n');
@@ -356,14 +604,12 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
             
             setValidationErrors([]);
 
-            console.log('🔍 Calling updateStartupProfile...');
-            console.log('🔍 CA Service Code being saved:', formData.caServiceCode);
-            console.log('🔍 CS Service Code being saved:', formData.csServiceCode);
+            console.log('🔍 Saving form data:', formData);
+            console.log('🔍 Company type being saved:', formData.companyType);
             const success = await profileService.updateStartupProfile(startup.id, formData);
-            console.log('🔍 Update result:', success);
+            console.log('🔍 Save result:', success);
             
             // Handle subsidiaries - add, update, or delete as needed
-            console.log('🔍 Processing subsidiaries...');
             const currentSubsidiaries = await profileService.getStartupProfile(startup.id);
             const existingSubIds = currentSubsidiaries?.subsidiaries?.map(sub => sub.id) || [];
             const newSubIds = formData.subsidiaries.map(sub => sub.id);
@@ -371,7 +617,6 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
             // Delete subsidiaries that are no longer in the list
             for (const existingId of existingSubIds) {
                 if (!newSubIds.includes(existingId)) {
-                    console.log(`🔍 Deleting subsidiary ${existingId}`);
                     await profileService.deleteSubsidiary(existingId);
                 }
             }
@@ -381,7 +626,6 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                 const sub = formData.subsidiaries[i];
                 if (sub.id && sub.id > 0) {
                     // Update existing subsidiary
-                    console.log(`🔍 Updating subsidiary ${sub.id}`);
                     await profileService.updateSubsidiary(sub.id, {
                         country: sub.country,
                         companyType: sub.companyType,
@@ -397,7 +641,6 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                     }
                 } else {
                     // Add new subsidiary
-                    console.log(`🔍 Adding new subsidiary ${i + 1}`);
                     const newSubId = await profileService.addSubsidiary(startup.id, {
                         country: sub.country,
                         companyType: sub.companyType,
@@ -417,14 +660,12 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
             }
             
             // Handle international operations - add, update, or delete as needed
-            console.log('🔍 Processing international operations...');
             const existingOpIds = currentSubsidiaries?.internationalOps?.map(op => op.id) || [];
             const newOpIds = formData.internationalOps.map(op => op.id);
             
             // Delete operations that are no longer in the list
             for (const existingId of existingOpIds) {
                 if (!newOpIds.includes(existingId)) {
-                    console.log(`🔍 Deleting international operation ${existingId}`);
                     await profileService.deleteInternationalOp(existingId);
                 }
             }
@@ -434,16 +675,16 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                 const op = formData.internationalOps[i];
                 if (op.id && op.id > 0) {
                     // Update existing operation
-                    console.log(`🔍 Updating international operation ${op.id}`);
                     await profileService.updateInternationalOp(op.id, {
                         country: op.country,
+                        companyType: op.companyType,
                         startDate: op.startDate
                     });
                 } else {
                     // Add new operation
-                    console.log(`🔍 Adding new international operation ${i + 1}`);
                     await profileService.addInternationalOp(startup.id, {
                         country: op.country,
+                        companyType: op.companyType,
                         startDate: op.startDate
                     });
                 }
@@ -454,19 +695,26 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                 console.log('Profile updated successfully');
                 
                 // Manually refresh the profile data to ensure UI updates
-                console.log('🔍 Refreshing profile data...');
                 const updatedProfile = await profileService.getStartupProfile(startup.id);
                 console.log('🔍 Refreshed profile data:', updatedProfile);
                 if (updatedProfile) {
-                    setFormData(sanitizeProfileData(updatedProfile));
+                    const sanitizedData = sanitizeProfileData(updatedProfile);
+                    console.log('🔍 Sanitized data for form:', sanitizedData);
+                    setFormData(sanitizedData);
                     // Notify parent so other tabs receive updated profile
                     if (onProfileUpdate) {
                         onProfileUpdate({
                             ...startup,
+                            // Update direct fields for compatibility with other tabs
+                            country_of_registration: updatedProfile.country,
+                            company_type: updatedProfile.companyType,
+                            registration_date: updatedProfile.registrationDate,
+                            currency: updatedProfile.currency, // Add currency directly to startup object
                             profile: {
                                 country: updatedProfile.country,
                                 companyType: updatedProfile.companyType,
                                 registrationDate: updatedProfile.registrationDate,
+                                currency: updatedProfile.currency,
                                 subsidiaries: updatedProfile.subsidiaries || [],
                                 internationalOps: updatedProfile.internationalOps || [],
                                 caServiceCode: updatedProfile.caServiceCode,
@@ -478,13 +726,19 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                     }
                 }
                 
-                // Trigger compliance task sync after profile update
-                console.log('🔍 Triggering compliance task sync...');
-                try {
-                    await profileService.syncComplianceTasks(startup.id);
-                    console.log('🔍 Compliance tasks synced successfully');
-                } catch (error) {
-                    console.error('❌ Error syncing compliance tasks:', error);
+                // Trigger compliance task sync only when primary/entity fields changed
+                const prevSignature = lastEntitySignatureRef.current;
+                const nextSignature = computeEntitySignature(updatedProfile || formData);
+                const shouldSync = prevSignature !== nextSignature;
+                lastEntitySignatureRef.current = nextSignature;
+                if (shouldSync) {
+                  try {
+                      await profileService.syncComplianceTasks(startup.id);
+                  } catch (error) {
+                      console.error('❌ Error syncing compliance tasks:', error);
+                  }
+                } else {
+                  console.log('ℹ️ No primary/entity change detected. Skipping compliance sync.');
                 }
             } else {
                 console.error('❌ Failed to update profile - success was false');
@@ -492,20 +746,45 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
             }
         } catch (error) {
             console.error('❌ Error saving profile:', error);
-            setValidationErrors(['Error saving profile']);
+            let errorMessage = 'Error saving profile';
+            if (error instanceof Error) {
+                errorMessage = error.message;
+                console.error('❌ Detailed error:', error);
+            }
+            setValidationErrors([errorMessage]);
         }
     };
 
   const handlePrimaryChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     if (name === 'countryOfRegistration') {
-      const newCountryTypes = profileService.getCompanyTypesByCountry(value);
-      setFormData(prev => ({
-        ...prev,
-        country: value,
-        companyType: newCountryTypes[0]
-      }));
+      const cr = rulesMap[value] || rulesMap['default'] || {};
+      const keys = Object.keys(cr).filter(k => k !== 'default');
+      const newCountryTypes = keys.length > 0 ? keys : (cr['default'] ? ['default'] : []);
+      
+      // Auto-select currency based on country
+      const autoSelectedCurrency = getCurrencyForCountryCode(value);
+      
+      // Only reset company type if the country actually changed
+      setFormData(prev => {
+        const newData = {
+          ...prev,
+          country: value,
+          currency: autoSelectedCurrency // Auto-select currency based on country
+        };
+        
+        // Only reset company type if country changed AND current company type is not valid for new country
+        if (prev.country !== value && !newCountryTypes.includes(prev.companyType)) {
+          newData.companyType = newCountryTypes[0] || '';
+        }
+        
+        return newData;
+      });
     } else {
+      console.log('🔍 Form field changed:', name, 'value:', value);
+      if (name === 'companyType') {
+        console.log('🔍 Company type selected:', value);
+      }
       setFormData(prev => ({ ...prev, [name]: value }));
     }
   };
@@ -831,11 +1110,11 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
           // Keep existing subsidiary data
           newSubs.push(currentSubs[i]);
         } else {
-          // Create new subsidiary with default values
+          // Create new subsidiary with empty values (will use admin-defined dropdowns)
           newSubs.push({ 
             id: 0, 
-            country: 'United States', 
-            companyType: 'C-Corporation', 
+            country: '', 
+            companyType: '', 
             registrationDate: '',
             caCode: '',
             csCode: '',
@@ -863,7 +1142,9 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
     const newSubs = [...formData.subsidiaries];
 
     if (name === 'country') {
-      const newCountryTypes = profileService.getCompanyTypesByCountry(value);
+      const cr = rulesMap[value] || rulesMap['default'] || {};
+      const keys = Object.keys(cr).filter(k => k !== 'default');
+      const newCountryTypes = keys.length > 0 ? keys : (cr['default'] ? ['default'] : []);
       newSubs[index] = { ...newSubs[index], country: value, companyType: newCountryTypes[0] };
     } else {
       newSubs[index] = { ...newSubs[index], [name]: value };
@@ -890,10 +1171,11 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
           // Keep existing operation data
           newOps.push(currentOps[i]);
         } else {
-          // Create new operation with default values
+          // Create new operation with empty values (will use admin-defined dropdowns)
           newOps.push({ 
             id: 0, 
-            country: 'United States', 
+            country: '', 
+            companyType: '',
             startDate: '' 
           });
         }
@@ -970,6 +1252,107 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
         </div>
       )}
 
+
+      {/* Verification Documents Section */}
+      {userProfile && (
+        <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <ShieldCheck className="w-5 h-5 text-green-600" />
+            <h3 className="text-lg font-semibold text-slate-700">Verification Documents</h3>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {userProfile.government_id && (
+              <div className="p-4 bg-slate-50 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-medium text-slate-900">Government ID</h4>
+                    <p className="text-sm text-slate-600">Identity verification document</p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => window.open(userProfile.government_id, '_blank')}
+                    className="flex items-center gap-1"
+                  >
+                    <Download className="w-4 h-4" />
+                    View
+                  </Button>
+                </div>
+              </div>
+            )}
+            
+            {userProfile.ca_license && (
+              <div className="p-4 bg-slate-50 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-medium text-slate-900">Professional License</h4>
+                    <p className="text-sm text-slate-600">CA/CS license or role-specific document</p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => window.open(userProfile.ca_license, '_blank')}
+                    className="flex items-center gap-1"
+                  >
+                    <Download className="w-4 h-4" />
+                    View
+                  </Button>
+                </div>
+              </div>
+            )}
+            
+            {userProfile.financial_advisor_license_url && (
+              <div className="p-4 bg-slate-50 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-medium text-slate-900">Financial Advisor License</h4>
+                    <p className="text-sm text-slate-600">Investment advisor license</p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => window.open(userProfile.financial_advisor_license_url, '_blank')}
+                    className="flex items-center gap-1"
+                  >
+                    <Download className="w-4 h-4" />
+                    View
+                  </Button>
+                </div>
+              </div>
+            )}
+            
+            {userProfile.logo_url && (
+              <div className="p-4 bg-slate-50 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-medium text-slate-900">Company Logo</h4>
+                    <p className="text-sm text-slate-600">Company branding logo</p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => window.open(userProfile.logo_url, '_blank')}
+                    className="flex items-center gap-1"
+                  >
+                    <Download className="w-4 h-4" />
+                    View
+                  </Button>
+                </div>
+              </div>
+            )}
+            
+            {userProfile.investment_advisor_code && (
+              <div className="p-4 bg-slate-50 rounded-lg">
+                <div>
+                  <h4 className="font-medium text-slate-900">Investment Advisor Code</h4>
+                  <p className="text-sm text-slate-600">Code: {userProfile.investment_advisor_code}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="flex justify-between items-center">
         <h2 className="text-3xl font-bold text-slate-900">Company Profile</h2>
         {canEdit && !isEditing && (
@@ -983,6 +1366,16 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
       </div>
 
       <fieldset disabled={!isEditing || !canEdit} className="space-y-8">
+        {!isEditing && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+              <p className="text-blue-800 font-medium">View Mode - Click "Edit Profile" to modify information</p>
+            </div>
+          </div>
+        )}
+        
+        
         {/* Primary Details & Service Providers Card */}
         <div className="bg-white rounded-xl shadow-xl border border-slate-200 p-8 hover:shadow-2xl transition-shadow duration-300">
           <div className="space-y-8">
@@ -996,7 +1389,7 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                 </div>
                 <h3 className="text-xl font-bold text-slate-900">Primary Details</h3>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 <FormSelect 
                                 label="Country of Registration" 
                   name="countryOfRegistration" 
@@ -1004,7 +1397,13 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                   onChange={handlePrimaryChange} 
                   disabled={!isEditing}
                             >
-                                {allCountries.map(c => <option key={c} value={c}>{c}</option>)}
+                                <option value="">Select Country</option>
+                                {availableCountries.map(countryCode => {
+                                    // Get country name from comprehensive rules
+                                    const countryData = rulesMap[countryCode];
+                                    const countryName = countryData?.country_name || countryCode;
+                                    return <option key={countryCode} value={countryCode}>{countryName}</option>;
+                                })}
                 </FormSelect>
                 <FormSelect 
                                 label="Company Type" 
@@ -1013,7 +1412,51 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                   onChange={handlePrimaryChange} 
                   disabled={!isEditing}
                             >
-                                {companyTypesByCountry.map(type => <option key={type} value={type}>{type}</option>)}
+                                <option value="">Select Company Type</option>
+                                {companyTypesByCountry.length > 0 ? (
+                                    companyTypesByCountry.map(type => <option key={type} value={type}>{type}</option>)
+                                ) : (
+                                    <>
+                                        <option value="Private Limited Company (Pvt. Ltd.)">Private Limited Company (Pvt. Ltd.)</option>
+                                        <option value="Public Limited Company (Ltd.)">Public Limited Company (Ltd.)</option>
+                                        <option value="Limited Liability Partnership (LLP)">Limited Liability Partnership (LLP)</option>
+                                        <option value="One Person Company (OPC)">One Person Company (OPC)</option>
+                                        <option value="Partnership Firm">Partnership Firm</option>
+                                        <option value="Sole Proprietorship">Sole Proprietorship</option>
+                                        <option value="Section 8 Company (Non-Profit)">Section 8 Company (Non-Profit)</option>
+                                        <option value="NGO (Trust / Society)">NGO (Trust / Society)</option>
+                                    </>
+                                )}
+                </FormSelect>
+                <FormSelect 
+                                label="Currency" 
+                  name="currency" 
+                  value={formData.currency || 'USD'} 
+                  onChange={handlePrimaryChange} 
+                  disabled={!isEditing}
+                            >
+                                <option value="USD">USD - US Dollar</option>
+                                <option value="INR">INR - Indian Rupee</option>
+                                <option value="BTN">BTN - Bhutanese Ngultrum</option>
+                                <option value="AMD">AMD - Armenian Dram</option>
+                                <option value="BYN">BYN - Belarusian Ruble</option>
+                                <option value="GEL">GEL - Georgian Lari</option>
+                                <option value="ILS">ILS - Israeli Shekel</option>
+                                <option value="JOD">JOD - Jordanian Dinar</option>
+                                <option value="NGN">NGN - Nigerian Naira</option>
+                                <option value="PHP">PHP - Philippine Peso</option>
+                                <option value="RUB">RUB - Russian Ruble</option>
+                                <option value="SGD">SGD - Singapore Dollar</option>
+                                <option value="LKR">LKR - Sri Lankan Rupee</option>
+                                <option value="GBP">GBP - British Pound</option>
+                                <option value="EUR">EUR - Euro</option>
+                                <option value="HKD">HKD - Hong Kong Dollar</option>
+                                <option value="RSD">RSD - Serbian Dinar</option>
+                                <option value="BRL">BRL - Brazilian Real</option>
+                                <option value="VND">VND - Vietnamese Dong</option>
+                                <option value="MMK">MMK - Myanmar Kyat</option>
+                                <option value="AZN">AZN - Azerbaijani Manat</option>
+                                <option value="PKR">PKR - Pakistani Rupee</option>
                 </FormSelect>
                 <FormInput 
                                 label="Date of Registration" 
@@ -1141,7 +1584,12 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                       onChange={(e) => handleSubsidiaryChange(index, e)} 
                       disabled={!isEditing}
                             >
-                                {allCountries.map(c => <option key={c} value={c}>{c}</option>)}
+                                <option value="">Select Country</option>
+                                {availableCountries.map(countryCode => {
+                                    const countryData = rulesMap[countryCode];
+                                    const countryName = countryData?.country_name || countryCode;
+                                    return <option key={countryCode} value={countryCode}>{countryName}</option>;
+                                })}
                     </FormSelect>
                     <FormSelect 
                                 label="Company Type" 
@@ -1150,7 +1598,12 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                       onChange={(e) => handleSubsidiaryChange(index, e)} 
                       disabled={!isEditing}
                     >
-                      {profileService.getCompanyTypesByCountry(sub.country).map(type => <option key={type} value={type}>{type}</option>)}
+                      <option value="">Select Company Type</option>
+                      {(() => {
+                        const countryData = rulesMap[sub.country];
+                        if (!countryData || !countryData.company_types) return [];
+                        return Object.keys(countryData.company_types);
+                      })().map(type => <option key={type} value={type}>{type}</option>)}
                     </FormSelect>
                     <FormInput 
                                 label="Registration Date" 
@@ -1266,7 +1719,28 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ startup, userRole, onProfileUpd
                         onChange={(e) => handleIntlOpChange(index, e)} 
                         disabled={!isEditing}
                             >
-                                    {allCountries.map(c => <option key={c} value={c}>{c}</option>)}
+                                    <option value="">Select Country</option>
+                                    {availableCountries.map(countryCode => {
+                                        const countryData = rulesMap[countryCode];
+                                        const countryName = countryData?.country_name || countryCode;
+                                        return <option key={countryCode} value={countryCode}>{countryName}</option>;
+                                    })}
+                      </FormSelect>
+                    </div>
+                    <div className="md:col-span-1">
+                      <FormSelect 
+                        label="Company Type" 
+                        name="companyType" 
+                        value={op.companyType} 
+                        onChange={(e) => handleIntlOpChange(index, e)} 
+                        disabled={!isEditing}
+                            >
+                                    <option value="">Select Company Type</option>
+                                    {(() => {
+                                      const countryData = rulesMap[op.country];
+                                      if (!countryData || !countryData.company_types) return [];
+                                      return Object.keys(countryData.company_types);
+                                    })().map(t => <option key={t} value={t}>{t}</option>)}
                       </FormSelect>
                     </div>
                     <div className="md:col-span-1">

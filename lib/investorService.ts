@@ -145,14 +145,51 @@ class InvestorService {
   }
 
   // Format currency for display
-  formatCurrency(amount: number): string {
+  formatCurrency(amount: number, currency: string = 'USD'): string {
+    const symbol = this.getCurrencySymbol(currency);
     if (amount >= 1000000) {
-      return `$${(amount / 1000000).toFixed(1)}M`;
+      return `${symbol}${(amount / 1000000).toFixed(1)}M`;
     } else if (amount >= 1000) {
-      return `$${(amount / 1000).toFixed(1)}K`;
+      return `${symbol}${(amount / 1000).toFixed(1)}K`;
     } else {
-      return `$${amount.toLocaleString()}`;
+      return `${symbol}${amount.toLocaleString()}`;
     }
+  }
+
+  // Get currency symbol
+  getCurrencySymbol(currency: string): string {
+    const symbols: Record<string, string> = {
+      'USD': '$',
+      'EUR': '€',
+      'GBP': '£',
+      'INR': '₹',
+      'CAD': 'C$',
+      'AUD': 'A$',
+      'JPY': '¥',
+      'CHF': 'CHF',
+      'SGD': 'S$',
+      'CNY': '¥',
+      'BTN': 'Nu.',
+      'AMD': '֏',
+      'BYN': 'Br',
+      'GEL': '₾',
+      'ILS': '₪',
+      'JOD': 'د.ا',
+      'NGN': '₦',
+      'PHP': '₱',
+      'RUB': '₽',
+      'LKR': '₨',
+      'BRL': 'R$',
+      'VND': '₫',
+      'MMK': 'K',
+      'AZN': '₼',
+      'RSD': 'дин.',
+      'HKD': 'HK$',
+      'PKR': '₨',
+      'MCO': '€',
+    };
+    
+    return symbols[currency] || currency;
   }
 }
 

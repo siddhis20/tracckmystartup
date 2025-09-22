@@ -9,7 +9,7 @@ import Button from './ui/Button';
 import { Briefcase, UserPlus, Trash2, Loader2, CheckCircle, Upload } from 'lucide-react';
 
 interface RegistrationPageProps {
-  onRegister: (user: AuthUser, founders: Founder[], startupName?: string) => void;
+  onRegister: (user: AuthUser, founders: Founder[], startupName?: string, investmentAdvisorCode?: string) => void;
   onNavigateToLogin: () => void;
 }
 
@@ -36,6 +36,7 @@ const RegistrationPage: React.FC<RegistrationPageProps> = ({ onRegister, onNavig
     const [country, setCountry] = useState(allCountries[0]);
     const [role, setRole] = useState<UserRole>('Startup');
     const [startupName, setStartupName] = useState('');
+    const [investmentAdvisorCode, setInvestmentAdvisorCode] = useState('');
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [showConfirmation, setShowConfirmation] = useState(false);
@@ -160,7 +161,7 @@ const RegistrationPage: React.FC<RegistrationPageProps> = ({ onRegister, onNavig
 
                 // Prepare founder data by removing the temporary ID used for React keys
                 const founderDataToSubmit = founders.map(({ id, ...rest }) => rest);
-                onRegister(user, role === 'Startup' ? founderDataToSubmit : [], role === 'Startup' ? startupName : undefined);
+                onRegister(user, role === 'Startup' ? founderDataToSubmit : [], role === 'Startup' ? startupName : undefined, investmentAdvisorCode || undefined);
             } else if (confirmationRequired) {
                 console.log('Email confirmation required');
                 setShowConfirmation(true);
@@ -261,6 +262,7 @@ const RegistrationPage: React.FC<RegistrationPageProps> = ({ onRegister, onNavig
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
                         required
+                        className="border-slate-300"
                     />
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -307,8 +309,22 @@ const RegistrationPage: React.FC<RegistrationPageProps> = ({ onRegister, onNavig
                         <option value="CA">CA</option>
                         <option value="CS">CS</option>
                         <option value="Startup Facilitation Center">Startup Facilitation Center</option>
+                        <option value="Investment Advisor">Investment Advisor</option>
                     </Select>
                 </div>
+                
+                {/* Investment Advisor Code Field - Only show for Investor and Startup roles */}
+                {(role === 'Investor' || role === 'Startup') && (
+                    <Input 
+                        label="Investment Advisor Code (Optional)"
+                        id="investmentAdvisorCode"
+                        type="text"
+                        value={investmentAdvisorCode}
+                        onChange={(e) => setInvestmentAdvisorCode(e.target.value)}
+                        placeholder="IA-XXXXXX"
+                        helpText="Enter your Investment Advisor's code if you have one"
+                    />
+                )}
                 
                 {/* Startup Name Field - Only show for Startup role */}
                 {role === 'Startup' && (

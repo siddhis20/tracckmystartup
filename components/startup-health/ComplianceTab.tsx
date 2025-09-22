@@ -1,12 +1,15 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { Startup, ComplianceStatus, UserRole } from '../../types';
-import { COMPLIANCE_RULES, COUNTRIES } from '../../constants';
-import { complianceRulesService } from '../../lib/complianceRulesService';
-import { complianceService, ComplianceTask, ComplianceUpload } from '../../lib/complianceService';
-import { UploadCloud, Download, Trash2, Eye, X, CheckCircle, AlertCircle, Clock } from 'lucide-react';
+import { complianceRulesIntegrationService, IntegratedComplianceTask } from '../../lib/complianceRulesIntegrationService';
+import { complianceService, ComplianceUpload } from '../../lib/complianceService';
+import { supabase } from '../../lib/supabase';
+import { getCountryProfessionalTitles } from '../../lib/utils';
+import { UploadCloud, Download, Trash2, Eye, X, CheckCircle, AlertCircle, Clock, FileText, Calendar, User } from 'lucide-react';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Modal from '../ui/Modal';
+import ComplianceSubmissionButton from '../ComplianceSubmissionButton';
+import IPTrademarkSection from './IPTrademarkSection';
 
 type CurrentUserLike = { role: UserRole; email?: string; serviceCode?: string };
 
@@ -18,16 +21,7 @@ interface ComplianceTabProps {
   allowCAEdit?: boolean; // This now allows both CA and CS editing
 }
 
-interface GeneratedTask {
-    entityIdentifier: string;
-    entityDisplayName: string;
-    year: number;
-    task: string;
-    taskId: string;
-    action: 'Upload';
-    caRequired: boolean;
-    csRequired: boolean;
-}
+// Using IntegratedComplianceTask from the integration service
 
 const VerificationStatusDisplay: React.FC<{ status: ComplianceStatus }> = ({ status }) => {
     let colorClass = "";
@@ -58,7 +52,7 @@ const VerificationStatusDisplay: React.FC<{ status: ComplianceStatus }> = ({ sta
             {icon}
             {status}
         </span>
-    );
+                    );
 };
 
 const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onUpdateCompliance, isViewOnly = false, allowCAEdit = false }) => {
@@ -69,10 +63,10 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
         startupId: startup.id 
     });
     
-    const [complianceTasks, setComplianceTasks] = useState<ComplianceTask[]>([]);
+    const [complianceTasks, setComplianceTasks] = useState<IntegratedComplianceTask[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [uploadModalOpen, setUploadModalOpen] = useState(false);
-    const [selectedTask, setSelectedTask] = useState<GeneratedTask | null>(null);
+    const [selectedTask, setSelectedTask] = useState<IntegratedComplianceTask | null>(null);
     const [uploading, setUploading] = useState(false);
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [uploadSuccess, setUploadSuccess] = useState(false);
@@ -84,219 +78,87 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
     });
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    // Generate compliance tasks based on profile (falls back to DB tasks if profile incomplete)
-    const generatedTasks = useMemo((): { [entityName: string]: GeneratedTask[] } => {
-        const groups: { [entityName: string]: GeneratedTask[] } = {};
-        const currentYear = new Date().getFullYear();
-        
-        // Prefer explicit profile; gracefully handle missing data
-        const profileData = startup.profile && startup.profile.country && startup.profile.companyType
-            ? startup.profile
-            : {
-                country: '',
-                companyType: '',
-                registrationDate: '',
-                subsidiaries: [],
-                internationalOps: []
-            };
+    // NOTE: Removed client-side fallback rules generation.
+    // From now on, tasks are exclusively sourced from DB via RPC + compliance_checks.
 
-        console.log('ComplianceTab - Current profile data:', profileData);
-        console.log('ComplianceTab - Subsidiaries count:', profileData.subsidiaries?.length || 0);
-
-        // If essential fields are missing, stop generation here; the UI will still render DB-backed tasks
-        if (!profileData.country || !profileData.companyType || !profileData.registrationDate) {
-            console.log('ComplianceTab - Incomplete profile; relying on DB tasks if present');
-            return groups;
-        }
-
-        const processEntity = (entity: { identifier: string; displayName: string, regDate: string, country: string, companyType: string }) => {
-            if (!entity.regDate) return;
-            const registrationYear = new Date(entity.regDate).getFullYear();
-            
-            // Prefer DB rules; fallback to constants
-            let dbCountry: any = null;
-            try {
-                // Note: use synchronous cache pattern by reading from window to avoid async in memo
-                dbCountry = (window as any).__dbComplianceRules?.[entity.country] || null;
-            } catch {}
-            const sourceCountryRules = dbCountry || COMPLIANCE_RULES[entity.country] || COMPLIANCE_RULES['default'];
-            const rules = sourceCountryRules[entity.companyType] || sourceCountryRules.default;
-            
-            if (!rules || Array.isArray(rules)) {
-                console.log(`ComplianceTab - No rules found for ${entity.country}/${entity.companyType}`);
-                return;
-            }
-            
-            if (!groups[entity.displayName]) groups[entity.displayName] = [];
-
-            console.log(`ComplianceTab - Processing entity: ${entity.displayName}, Registration: ${registrationYear}, Current: ${currentYear}`);
-
-            // Generate tasks from registration year to current year
-            for (let year = registrationYear; year <= currentYear; year++) {
-                const yearTasks: GeneratedTask[] = [];
-                
-                // First year tasks (only for registration year)
-                if (year === registrationYear && rules.firstYear) {
-                    console.log(`ComplianceTab - Adding first year tasks for ${year}:`, rules.firstYear.length);
-                    rules.firstYear.forEach(rule => {
-                        yearTasks.push({
-                            entityIdentifier: entity.identifier,
-                            entityDisplayName: entity.displayName,
-                            year: year,
-                            task: rule.name,
-                            taskId: `${entity.identifier}-${year}-fy-${rule.id}`,
-                            action: 'Upload',
-                            caRequired: rule.caRequired,
-                            csRequired: rule.csRequired,
-                        });
-                    });
-                }
-                
-                // Annual tasks (for all years)
-                if(rules.annual) {
-                    console.log(`ComplianceTab - Adding annual tasks for ${year}:`, rules.annual.length);
-                    rules.annual.forEach(rule => {
-                         yearTasks.push({
-                            entityIdentifier: entity.identifier,
-                            entityDisplayName: entity.displayName,
-                            year: year,
-                            task: rule.name,
-                            taskId: `${entity.identifier}-${year}-an-${rule.id}`,
-                            action: 'Upload',
-                            caRequired: rule.caRequired,
-                            csRequired: rule.csRequired,
-                        });
-                    });
-                }
-                groups[entity.displayName].push(...yearTasks);
-            }
-        };
-
-        // Process parent company
-        processEntity({ 
-            identifier: 'parent', 
-            displayName: `Parent Company (${profileData.country})`, 
-            regDate: profileData.registrationDate, 
-            country: profileData.country, 
-            companyType: profileData.companyType 
-        });
-        
-        // Process subsidiaries - only if they exist and have registration dates
-        if (profileData.subsidiaries && profileData.subsidiaries.length > 0) {
-            profileData.subsidiaries.forEach((sub, i) => {
-                if (sub.registrationDate) {
-                    processEntity({ 
-                        identifier: `sub-${i}`, 
-                        displayName: `Subsidiary ${i + 1} (${sub.country})`, 
-                        regDate: sub.registrationDate, 
-                        country: sub.country, 
-                        companyType: sub.companyType 
-                    });
-                }
-            });
-        }
-
-        // Process international operations - use parent companyType, per-country ops
-        if (profileData.internationalOps && profileData.internationalOps.length > 0) {
-            profileData.internationalOps.forEach((op, i) => {
-                if (op.startDate) {
-                    processEntity({
-                        identifier: `intl-${i}`,
-                        displayName: `International Operation ${i + 1} (${op.country})`,
-                        regDate: op.startDate,
-                        country: op.country,
-                        companyType: profileData.companyType
-                    });
-                }
-            });
-        }
-
-        // Sort tasks by year (descending) and task name
-        Object.values(groups).forEach(taskList => {
-            taskList.sort((a, b) => b.year - a.year || a.task.localeCompare(b.task));
-        });
-
-        console.log('ComplianceTab - Generated tasks:', Object.keys(groups));
-        return groups;
-    }, [startup.profile]);
+    // Track syncing to avoid loops
+    const isSyncingRef = useRef(false);
+    const lastEntitySignatureRef = useRef<string | null>(null);
 
     // Load compliance data from backend
     useEffect(() => {
-        // Warm local cache of DB rules for memo usage
-        (async () => {
-            try {
-                const all = await complianceRulesService.listAll();
-                const map: any = {};
-                all.forEach(row => { map[row.country_code] = row.rules; });
-                (window as any).__dbComplianceRules = map;
-            } catch (e) {
-                // ignore
-            }
-        })();
         loadComplianceData();
-    }, [startup.id, startup.profile?.country, startup.profile?.companyType, startup.profile?.registrationDate]); // Reload when profile essentials change
+    }, [startup.id, startup.country_of_registration, startup.company_type, startup.registration_date]); // Reload when startup essentials change
 
-    // Sync compliance tasks when profile changes (for new tasks)
+    // Sync compliance tasks when startup data changes (for new tasks)
     useEffect(() => {
-        if (startup.profile) {
-            console.log('🔍 Profile changed, syncing compliance tasks...');
-            complianceService.syncComplianceTasksWithDatabase(startup.id).then(() => {
+        // Create entity signature from startup data
+        const entitySignature = JSON.stringify({
+            country: startup.country_of_registration || null,
+            companyType: startup.company_type || null,
+            registrationDate: startup.registration_date || null
+        });
+
+        // Only sync when primary/entity-defining fields change
+        if (lastEntitySignatureRef.current !== entitySignature && !isSyncingRef.current) {
+            isSyncingRef.current = true;
+            console.log('🔍 Entity-defining fields changed, syncing compliance tasks...');
+            complianceRulesIntegrationService.syncComplianceTasksWithComprehensiveRules(startup.id).finally(() => {
+                lastEntitySignatureRef.current = entitySignature;
+                isSyncingRef.current = false;
                 loadComplianceData();
             });
         }
-    }, [startup.profile, startup.id]);
+    }, [startup.country_of_registration, startup.company_type, startup.registration_date, startup.id]);
 
-    // Subscribe to real-time updates
+    // Subscribe to real-time updates for compliance tasks/uploads for this startup
     useEffect(() => {
-        const subscription = complianceService.subscribeToComplianceTaskChanges(startup.id, (payload) => {
-            console.log('Compliance change detected:', payload);
-            loadComplianceData();
-        });
+        // Note: Real-time subscription functionality can be added later if needed
+        // For now, we'll rely on manual refresh when needed
 
         return () => {
-            subscription.unsubscribe();
+            // Cleanup if needed
         };
+    }, [startup.id]);
+
+    // Propagate admin compliance rule changes globally: when rules change, resync this startup's tasks
+    useEffect(() => {
+        const channel = supabase
+            .channel('compliance_rules_changes')
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'compliance_rules_comprehensive' },
+                async () => {
+                    try {
+                        console.log('🔁 Detected compliance_rules_comprehensive change. Resyncing tasks for startup', startup.id);
+                        await complianceRulesIntegrationService.syncComplianceTasksWithComprehensiveRules(startup.id);
+                        await loadComplianceData();
+                    } catch (e) {
+                        console.warn('Failed to resync after rules change', e);
+                    }
+                }
+            )
+            .subscribe();
+
+        return () => { channel.unsubscribe(); };
     }, [startup.id]);
 
     const loadComplianceData = async () => {
         try {
             setIsLoading(true);
 
-            // Use the new real-time method that generates tasks from profile if needed
-            const [tasks, allUploads] = await Promise.all([
-                complianceService.getComplianceTasksWithRealtime(startup.id),
-                complianceService.getAllComplianceUploads(startup.id)
-            ]);
+            // Force regenerate compliance tasks with correct years based on registration date
+            console.log('🔄 Force regenerating compliance tasks with correct years...');
+            await complianceRulesIntegrationService.forceRegenerateComplianceTasks(startup.id);
+
+            // Use the new integration service that combines comprehensive rules with existing tasks
+            const integratedTasks = await complianceRulesIntegrationService.getComplianceTasksForStartup(startup.id);
             
-            // Combine tasks with their uploads
-            const tasksWithUploads = tasks.map(task => ({
-                ...task,
-                uploads: allUploads[task.taskId] || []
-            }));
-            
-            console.log('🔍 Loaded compliance data:', tasksWithUploads);
-            setComplianceTasks(tasksWithUploads);
+            console.log('🔍 Loaded integrated compliance data:', integratedTasks);
+            setComplianceTasks(integratedTasks);
 
             // After loading tasks, ensure overall startup status reflects per-task verification
-            await syncOverallComplianceStatus(tasksWithUploads);
-
-            // Auto-resync guard against stale tasks from old countries when profile changed
-            if (startup.profile) {
-                const expectedEntities = new Set<string>();
-                expectedEntities.add(`Parent Company (${startup.profile.country})`);
-                (startup.profile.subsidiaries || []).forEach((sub, i) => {
-                    expectedEntities.add(`Subsidiary ${i + 1} (${sub.country})`);
-                });
-
-                const actualEntities = new Set(tasksWithUploads.map(t => t.entityDisplayName));
-                const hasMismatch = Array.from(actualEntities).some(name => !expectedEntities.has(name));
-
-                if (hasMismatch) {
-                    console.warn('⚠️ Detected stale compliance tasks (entity mismatch). Forcing resync.');
-                    await complianceService.syncComplianceTasksWithDatabase(startup.id);
-                    await loadComplianceData();
-                }
-            }
+            await syncOverallComplianceStatus(integratedTasks);
         } catch (error) {
             console.error('Error loading compliance data:', error);
             setComplianceTasks([]);
@@ -306,7 +168,7 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
     };
 
     // Compute and update overall startup compliance based on task statuses
-    const syncOverallComplianceStatus = async (tasks: ComplianceTask[]) => {
+    const syncOverallComplianceStatus = async (tasks: IntegratedComplianceTask[]) => {
         try {
             if (!tasks || tasks.length === 0) return;
 
@@ -379,7 +241,11 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
             if (currentOverall === targetStatus) return;
 
             try {
-                await complianceService.updateStartupOverallCompliance(startup.id, targetStatus);
+                // Update overall compliance status in the database
+                await supabase
+                    .from('startups')
+                    .update({ compliance_status: targetStatus })
+                    .eq('id', startup.id);
             } catch (e) {
                 console.warn('Failed to update overall startup compliance (non-blocking):', e);
             }
@@ -388,9 +254,13 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
         }
     };
 
-    const getVerificationCell = (item: GeneratedTask, type: 'ca' | 'cs') => {
-        // Work even if startup.profile is missing (common for CA view minimal startup object)
-        const profile: any = startup.profile || {};
+    const getVerificationCell = (item: IntegratedComplianceTask, type: 'ca' | 'cs') => {
+        // Work with startup data directly
+        const profile: any = {
+            country: startup.country_of_registration,
+            companyType: startup.company_type,
+            registrationDate: startup.registration_date
+        };
 
         // Determine entity assignment for CA/CS
         const getAssignedCodes = (identifier: string): { caCode?: string; csCode?: string } => {
@@ -490,7 +360,7 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
                                     }
                                     : task
                             )
-                        );
+                    );
                         
                         if (onUpdateCompliance) {
                             onUpdateCompliance(startup.id, item.taskId, type, newStatus);
@@ -498,13 +368,12 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
                         
                         // Update database in background
                         try {
-                            await complianceService.updateComplianceStatus(
+                            await complianceRulesIntegrationService.updateComplianceStatus(
                                 startup.id,
                                 item.taskId,
-                                type,
                                 newStatus,
-                                currentUser?.email || 'unknown'
-                            );
+                                type.toUpperCase() as 'CA' | 'CS'
+                    );
 
                             // Recompute and update overall status after a change
                             const updated = complianceTasks.map(task =>
@@ -514,7 +383,7 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
                                         [type === 'ca' ? 'caStatus' : 'csStatus']: newStatus,
                                       }
                                     : task
-                            );
+                    );
                             await syncOverallComplianceStatus(updated as any);
                         } catch (error) {
                             console.error('Error updating compliance status:', error);
@@ -528,7 +397,7 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
                                         }
                                         : task
                                 )
-                            );
+                    );
                         }
                     }}
                     className="bg-white border border-gray-300 rounded-md px-2 py-1 text-xs focus:ring-blue-500 focus:border-blue-500"
@@ -537,18 +406,20 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
                     <option value={ComplianceStatus.Verified}>Verified</option>
                     <option value={ComplianceStatus.Rejected}>Rejected</option>
                 </select>
-            );
+                    );
         }
 
         // If user cannot edit: show display; if task is not required show NotRequired explicitly
-        console.log('🔍 Showing static display for', type, 'column with status:', status, 'isRequired:', isRequired);
+        console.log('🔍 Showing static display for', type, 'column with status:', status, 'isRequired:', isRequired, 'task:', item.task, 'caRequired:', item.caRequired, 'csRequired:', item.csRequired);
         if (!isRequired) {
+            console.log('🔍 Task not required for', type, '- showing NotRequired');
             return <VerificationStatusDisplay status={ComplianceStatus.NotRequired} />;
         }
+        console.log('🔍 Task required for', type, '- showing status:', status);
         return <VerificationStatusDisplay status={status} />;
     };
 
-    const handleUpload = (task: GeneratedTask) => {
+    const handleUpload = (task: IntegratedComplianceTask) => {
         setSelectedTask(task);
         setSelectedFile(null);
         setUploadSuccess(false);
@@ -565,12 +436,12 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
 
         try {
             setUploading(true);
-            const result = await complianceService.uploadComplianceDocument(
+            const result = await complianceRulesIntegrationService.uploadComplianceDocument(
                 startup.id,
                 selectedTask.taskId,
                 selectedFile,
                 currentUser.email || 'unknown'
-            );
+                    );
             
             if (result) {
                 console.log('Upload successful:', result);
@@ -607,7 +478,7 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
         if (!deleteTargetId) return;
 
         try {
-            const success = await complianceService.deleteComplianceUpload(deleteTargetId);
+            const success = await complianceRulesIntegrationService.deleteComplianceUpload(deleteTargetId);
             if (success) {
                 console.log('Delete successful');
                 loadComplianceData(); // Refresh data
@@ -632,22 +503,17 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
     const canUpload = currentUser?.role === 'Startup' || currentUser?.role === 'Admin';
 
     // Group DB tasks by entity for display (filter out stale entities not in profile)
-    const dbTasksGrouped = useMemo((): { [entityName: string]: GeneratedTask[] } => {
+    const dbTasksGrouped = useMemo((): { [entityName: string]: IntegratedComplianceTask[] } => {
         if (!complianceTasks || complianceTasks.length === 0) return {};
         
-        const groups: { [entityName: string]: GeneratedTask[] } = {};
+        const groups: { [entityName: string]: IntegratedComplianceTask[] } = {};
         const expectedEntities = new Set<string>();
         
         // Build expected entity names
-        if (startup.profile?.country) {
-            expectedEntities.add(`Parent Company (${startup.profile.country})`);
+        if (startup.country_of_registration) {
+            expectedEntities.add(`Parent Company (${startup.country_of_registration})`);
         }
-        (startup.profile?.subsidiaries || []).forEach((sub, i) => {
-            expectedEntities.add(`Subsidiary ${i + 1} (${sub.country})`);
-        });
-        (startup.profile?.internationalOps || []).forEach((op, i) => {
-            expectedEntities.add(`International Operation ${i + 1} (${op.country})`);
-        });
+        // Note: Subsidiaries and international ops would need to be loaded separately if needed
         
         // Group tasks by entity
         for (const t of complianceTasks) {
@@ -661,9 +527,16 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
                 year: t.year,
                 task: t.task,
                 taskId: t.taskId,
-                action: 'Upload',
                 caRequired: t.caRequired,
                 csRequired: t.csRequired,
+                caStatus: t.caStatus,
+                csStatus: t.csStatus,
+                uploads: t.uploads,
+                complianceRule: t.complianceRule,
+                frequency: t.frequency,
+                complianceDescription: t.complianceDescription,
+                caType: t.caType,
+                csType: t.csType
             });
         }
         
@@ -673,16 +546,15 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
         });
         
         return groups;
-    }, [complianceTasks, startup.profile?.country, startup.profile?.subsidiaries]);
+    }, [complianceTasks, startup.country_of_registration]);
 
-    // Prefer DB-backed tasks; fall back to generated client-side tasks
-    const displayTasks = useMemo(() => {
-        const hasDbTasks = Object.keys(dbTasksGrouped).length > 0;
-        return hasDbTasks ? dbTasksGrouped : generatedTasks;
-    }, [dbTasksGrouped, generatedTasks]);
+    // Only DB-backed tasks are displayed
+    const displayTasks = useMemo((): { [entityName: string]: IntegratedComplianceTask[] } => {
+        return dbTasksGrouped;
+    }, [dbTasksGrouped]);
 
     // Filter tasks based on current filters
-    const filteredTasks = useMemo(() => {
+    const filteredTasks = useMemo((): { [entityName: string]: IntegratedComplianceTask[] } => {
         if (filters.entity === 'all' && filters.year === 'all') {
             return displayTasks;
         }
@@ -690,12 +562,12 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
         return Object.fromEntries(
             Object.entries(displayTasks).map(([entityName, tasks]) => [
                 entityName,
-                tasks.filter(task => 
+                (tasks as IntegratedComplianceTask[]).filter(task => 
                     (filters.entity === 'all' || entityName.includes(filters.entity)) &&
                     (filters.year === 'all' || task.year === parseInt(filters.year))
                 )
-            ]).filter(([_, tasks]) => tasks.length > 0)
-        );
+            ]).filter(([_, tasks]) => (tasks as IntegratedComplianceTask[]).length > 0)
+                    );
     }, [displayTasks, filters]);
 
     if (isLoading) {
@@ -710,7 +582,7 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
                     </div>
                 </div>
             </div>
-        );
+                    );
     }
 
     return (
@@ -718,6 +590,17 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
             <div className="flex justify-between items-center">
                 <h2 className="text-2xl font-semibold text-slate-700">Compliance Checklist</h2>
                 
+                {/* Compliance Submission Button - Only show for Startup users */}
+                {!isViewOnly && currentUser?.role === 'Startup' && (
+                    <ComplianceSubmissionButton 
+                        currentUser={currentUser} 
+                        userRole="Startup" 
+                        className="mb-0"
+                    />
+                )}
+            </div>
+            
+            <div className="flex justify-end items-center">
                 {/* Filters */}
                 <div className="flex gap-4">
                     <select 
@@ -737,7 +620,7 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
                         className="bg-white border border-gray-300 rounded-md px-3 py-1 text-sm"
                     >
                         <option value="all">All Years</option>
-                        {Array.from(new Set(Object.values(displayTasks).flat().map(task => task.year)))
+                        {Array.from(new Set(Object.values(displayTasks).flat().map((task: IntegratedComplianceTask) => task.year)))
                             .sort((a, b) => b - a)
                             .map(year => (
                                 <option key={year} value={year}>{year}</option>
@@ -748,22 +631,28 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
             </div>
 
             {Object.keys(filteredTasks).length > 0 ? (
-                Object.entries(filteredTasks).map(([entityName, tasks]) => (
-                    <Card key={entityName}>
-                        <h3 className="text-xl font-semibold text-slate-700 mb-4">{entityName}</h3>
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-left border-collapse">
-                                <thead className="bg-slate-50">
-                                    <tr>
-                                        <th className="p-4 text-sm font-semibold text-slate-600 uppercase tracking-wider text-center w-20">Year</th>
-                                        <th className="p-4 text-sm font-semibold text-slate-600 uppercase tracking-wider text-left w-48">Task</th>
-                                        <th className="p-4 text-sm font-semibold text-slate-600 uppercase tracking-wider text-center w-32">CA Verified</th>
-                                        <th className="p-4 text-sm font-semibold text-slate-600 uppercase tracking-wider text-center w-32">CS Verified</th>
-                                        <th className="p-4 text-sm font-semibold text-slate-600 uppercase tracking-wider text-center w-32">Action</th>
-                                    </tr>
-                                </thead>
+                Object.entries(filteredTasks).map(([entityName, tasks]) => {
+                    // Extract country code from entity name (e.g., "Parent Company (AT)" -> "AT")
+                    const countryCodeMatch = entityName.match(/\(([A-Z]{2})\)/);
+                    const countryCode = countryCodeMatch ? countryCodeMatch[1] : 'US';
+                    const professionalTitles = getCountryProfessionalTitles(countryCode);
+                    
+                    return (
+                        <Card key={entityName}>
+                            <h3 className="text-xl font-semibold text-slate-700 mb-4">{entityName}</h3>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left border-collapse">
+                                    <thead className="bg-slate-50">
+                                        <tr>
+                                            <th className="p-4 text-sm font-semibold text-slate-600 uppercase tracking-wider text-center w-20">Year</th>
+                                            <th className="p-4 text-sm font-semibold text-slate-600 uppercase tracking-wider text-left w-48">Task</th>
+                                            <th className="p-4 text-sm font-semibold text-slate-600 uppercase tracking-wider text-center w-32">{professionalTitles.caTitle} Verified</th>
+                                            <th className="p-4 text-sm font-semibold text-slate-600 uppercase tracking-wider text-center w-32">{professionalTitles.csTitle} Verified</th>
+                                            <th className="p-4 text-sm font-semibold text-slate-600 uppercase tracking-wider text-center w-32">Action</th>
+                                        </tr>
+                                    </thead>
                                 <tbody className="divide-y divide-slate-200 align-middle">
-                                    {tasks.map((item) => {
+                                    {(tasks as IntegratedComplianceTask[]).map((item) => {
                                         console.log('🔍 Rendering task:', { 
                                             taskId: item.taskId, 
                                             task: item.task, 
@@ -774,7 +663,36 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
                                         return (
                                             <tr key={item.taskId} className="hover:bg-slate-50 transition-colors h-16">
                                                 <td className="p-4 whitespace-nowrap text-slate-600 text-center align-middle w-20">{item.year}</td>
-                                                <td className="p-4 whitespace-normal text-slate-900 font-medium text-left align-middle w-48">{item.task}</td>
+                                                <td className="p-4 whitespace-normal text-slate-900 font-medium text-left align-middle w-48">
+                                                    <div>
+                                                        <div className="font-medium">{item.task}</div>
+                                                        {item.complianceRule && (
+                                                            <div className="text-xs text-gray-500 mt-1 space-y-1">
+                                                                {item.frequency && (
+                                                                    <div className="flex items-center gap-1">
+                                                                        <Calendar className="w-3 h-3" />
+                                                                        <span className="capitalize">{item.frequency.replace('-', ' ')}</span>
+                                                                    </div>
+                                                                )}
+                                                                {item.complianceDescription && (
+                                                                    <div className="flex items-start gap-1">
+                                                                        <FileText className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                                                                        <span className="text-xs">{item.complianceDescription}</span>
+                                                                    </div>
+                                                                )}
+                                                                {(item.caType || item.csType) && (
+                                                                    <div className="flex items-center gap-1">
+                                                                        <User className="w-3 h-3" />
+                                                                        <span className="text-xs">
+                                                                            {item.caType && item.csType ? `${item.caType} / ${item.csType}` : 
+                                                                             item.caType || item.csType}
+                                                                        </span>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </td>
                                                 <td className="p-4 whitespace-nowrap text-slate-600 text-center align-middle w-32">{getVerificationCell(item, 'ca')}</td>
                                                 <td className="p-4 whitespace-nowrap text-slate-600 text-center align-middle w-32">{getVerificationCell(item, 'cs')}</td>
                                                 <td className="p-4 whitespace-nowrap text-center align-middle w-32">
@@ -815,58 +733,42 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
                                                     </div>
                                                 </td>
                                             </tr>
-                                        );
+                    );
                                     })}
                                 </tbody>
                             </table>
                         </div>
                     </Card>
-                ))
+                    );
+                })
             ) : (
                 <Card>
                     <div className="p-8 text-center text-slate-500">
-                        {!startup.profile?.country || !startup.profile?.companyType || !startup.profile?.registrationDate ? (
+                        {!startup.country_of_registration || !startup.company_type || !startup.registration_date ? (
                             <div>
                                 <p className="text-lg font-semibold mb-2">No Profile Data</p>
                                 <p>Please complete your startup profile first to generate compliance tasks.</p>
                                 <p className="text-sm mt-2">Go to the Profile tab and set your country, company type, and registration date.</p>
                                 <p className="text-sm mt-2 text-blue-600">
-                                    Debug Info: Country: {startup.profile?.country || 'Not set'} | 
-                                    Type: {startup.profile?.companyType || 'Not set'} | 
-                                    Date: {startup.profile?.registrationDate || 'Not set'}
+                                    Debug Info: Country: {startup.country_of_registration || 'Not set'} | 
+                                    Type: {startup.company_type || 'Not set'} | 
+                                    Date: {startup.registration_date || 'Not set'}
                                 </p>
                             </div>
-                        ) : Object.keys(generatedTasks).length === 0 && complianceTasks.length === 0 ? (
+                        ) : complianceTasks.length === 0 ? (
                             <div>
-                                <p className="text-lg font-semibold mb-2">No Compliance Tasks Generated</p>
-                                <p>Compliance tasks should be generated based on your profile settings.</p>
+                                <p className="text-lg font-semibold mb-2">No Compliance Tasks Found</p>
+                                <p>Tasks are driven by admin-defined rules. Once rules exist for your profile's country and company type, they will appear here automatically.</p>
                                 <p className="text-sm mt-2">
-                                    Country: <span className="font-medium">{startup.profile?.country}</span> | 
-                                    Company Type: <span className="font-medium">{startup.profile?.companyType}</span> | 
-                                    Registration: <span className="font-medium">{startup.profile?.registrationDate}</span>
-                                </p>
-                                <p className="text-sm mt-2">
-                                    No compliance rules found for this country/company type combination.
-                                </p>
-                                <p className="text-sm mt-2 text-blue-600">
-                                    Available countries: {Object.keys(COMPLIANCE_RULES).join(', ')}
+                                    Country: <span className="font-medium">{startup.country_of_registration}</span> | 
+                                    Company Type: <span className="font-medium">{startup.company_type}</span> | 
+                                    Registration: <span className="font-medium">{startup.registration_date}</span>
                                 </p>
                                 <p className="text-sm mt-2 text-gray-500">
-                                    Please check if your country and company type are supported in the compliance rules.
+                                    If this seems incorrect, please contact the administrator to configure compliance rules in the Admin → Compliance Rules tab.
                                 </p>
                             </div>
-                        ) : (
-                            <div>
-                                <p className="text-lg font-semibold mb-2">Tasks Generated But Not Displaying</p>
-                                <p>Compliance tasks are generated but there might be a display issue.</p>
-                                <p className="text-sm mt-2 text-blue-600">
-                                    Generated tasks: {Object.keys(generatedTasks).length} entities | DB tasks: {complianceTasks.length}
-                                </p>
-                                <p className="text-sm mt-2 text-gray-500">
-                                    Try refreshing the page or check the console for errors.
-                                </p>
-                            </div>
-                        )}
+                        ) : null}
                         </div>
                 </Card>
             )}
@@ -993,8 +895,15 @@ const ComplianceTab: React.FC<ComplianceTabProps> = ({ startup, currentUser, onU
                     </div>
                 </div>
             </Modal>
+
+            {/* IP/Trademark Section */}
+            <IPTrademarkSection 
+                startupId={startup.id}
+                currentUser={currentUser}
+                isViewOnly={isViewOnly}
+            />
         </div>
-    );
+                    );
 };
 
 export default ComplianceTab;

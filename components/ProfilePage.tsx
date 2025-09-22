@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { ArrowLeft, User, Bell, HelpCircle, LogOut, Edit3, Shield, RefreshCw } from 'lucide-react';
 import Button from './ui/Button';
 import EditProfileModal from './EditProfileModal';
+import PaymentSection from './PaymentSection';
+import SubscriptionSummaryCards from './SubscriptionSummaryCards';
 import { ProfileService } from '../services/profileService';
 import { AuthUser } from '../lib/auth';
 
@@ -102,28 +104,31 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ currentUser, onBack, onProfil
     try {
       console.log('Saving profile:', updatedData);
       
-      // Update the currentUser state with the new data
+      // Update the currentUser state with all the new data
       // This ensures the UI reflects the changes immediately
-      if (updatedData.profile_photo_url) {
-        console.log('✅ Profile photo updated:', updatedData.profile_photo_url);
+      if (onProfileUpdate) {
+        const updatedUser = {
+          ...currentUser,
+          ...updatedData,
+          // Ensure these specific fields are updated
+          profile_photo_url: updatedData.profile_photo_url || currentUser.profile_photo_url,
+          investment_advisor_code_entered: updatedData.investment_advisor_code_entered || currentUser.investment_advisor_code_entered,
+          logo_url: updatedData.logo_url || currentUser.logo_url,
+          name: updatedData.name || currentUser.name,
+          phone: updatedData.phone || currentUser.phone,
+          address: updatedData.address || currentUser.address,
+          city: updatedData.city || currentUser.city,
+          state: updatedData.state || currentUser.state,
+          country: updatedData.country || currentUser.country,
+          company: updatedData.company || currentUser.company,
+          company_type: updatedData.company_type || currentUser.company_type, // Added company type field
+        };
         
-        // Call the callback to update the parent component's currentUser state
-        if (onProfileUpdate) {
-          onProfileUpdate({
-            ...currentUser,
-            profile_photo_url: updatedData.profile_photo_url
-          });
-        }
+        console.log('✅ Profile updated, calling onProfileUpdate with:', updatedUser);
+        onProfileUpdate(updatedUser);
       }
       
-      // The ProfileService.updateProfile is already called in EditProfileModal
-      // Here we can handle any additional logic after successful save
-      
       console.log('Profile saved successfully!');
-      
-      // Optionally, you could refresh the current user data here
-      // const refreshedProfile = await ProfileService.getProfile(currentUser.id);
-      // Update the currentUser state if needed
       
     } catch (error) {
       console.error('Error in handleSaveProfile:', error);
@@ -228,6 +233,16 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ currentUser, onBack, onProfil
             </span>
           </div>
 
+          {/* Company Type Badge - Only show if company type is set */}
+          {refreshedProfile?.company_type && (
+            <div className="flex flex-col sm:flex-row items-center gap-2 mb-3 sm:mb-4">
+              <span className="text-xs sm:text-sm text-slate-500">Company Type:</span>
+              <span className="bg-blue-100 text-blue-800 px-2 py-1 sm:px-3 sm:py-1 rounded-full text-xs sm:text-sm font-medium">
+                {refreshedProfile.company_type}
+              </span>
+            </div>
+          )}
+
           {/* Code Badge */}
           {(refreshedProfile?.ca_code || refreshedProfile?.cs_code) && (
             <div className="flex flex-col sm:flex-row items-center gap-2 mb-4 sm:mb-6">
@@ -236,6 +251,16 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ currentUser, onBack, onProfil
               </span>
               <span className="bg-blue-100 text-blue-800 px-2 py-1 sm:px-3 sm:py-1 rounded-md text-xs sm:text-sm font-medium">
                 {refreshedProfile?.ca_code || refreshedProfile?.cs_code}
+              </span>
+            </div>
+          )}
+
+          {/* Investment Advisor Code Badge */}
+          {refreshedProfile?.role === 'Investment Advisor' && refreshedProfile?.investment_advisor_code && (
+            <div className="flex flex-col sm:flex-row items-center gap-2 mb-4 sm:mb-6">
+              <span className="text-xs sm:text-sm text-slate-500">Investment Advisor Code:</span>
+              <span className="bg-purple-100 text-purple-800 px-2 py-1 sm:px-3 sm:py-1 rounded-md text-xs sm:text-sm font-medium">
+                {refreshedProfile.investment_advisor_code}
               </span>
             </div>
           )}
@@ -309,6 +334,28 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ currentUser, onBack, onProfil
             
 
           </div>
+        </div>
+      )}
+
+      {/* Subscription Summary Cards - Only for eligible user types */}
+      {refreshedProfile && ['Investor', 'Startup', 'Startup Facilitation Center', 'Investment Advisor'].includes(refreshedProfile.role) && (
+        <div className="mt-4">
+          <SubscriptionSummaryCards
+            userId={refreshedProfile.id}
+            userType={refreshedProfile.role}
+          />
+        </div>
+      )}
+
+      {/* Payment Section - Only for eligible user types */}
+      {refreshedProfile && ['Investor', 'Startup', 'Startup Facilitation Center', 'Investment Advisor'].includes(refreshedProfile.role) && (
+        <div className="mt-4">
+          <PaymentSection
+            userId={refreshedProfile.id}
+            userType={refreshedProfile.role as 'Investor' | 'Startup' | 'Startup Facilitation Center' | 'Investment Advisor'}
+            country={refreshedProfile.country || 'Global'}
+            startupCount={refreshedProfile.startup_count || 0}
+          />
         </div>
       )}
 

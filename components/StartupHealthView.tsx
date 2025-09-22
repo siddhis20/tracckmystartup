@@ -13,6 +13,7 @@ import ComplianceTab from './startup-health/ComplianceTab';
 import FinancialsTab from './startup-health/FinancialsTab';
 import EmployeesTab from './startup-health/EmployeesTab';
 import CapTableTab from './startup-health/CapTableTab';
+import StartupProfilePage from './StartupProfilePage';
 
 
 interface StartupHealthViewProps {
@@ -57,6 +58,7 @@ const StartupHealthView: React.FC<StartupHealthViewProps> = ({ startup, userRole
     const [currentStartup, setCurrentStartup] = useState<Startup>(startup);
     const [localOffers, setLocalOffers] = useState<InvestmentOffer[]>(investmentOffers || []);
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+    const [showAccountPage, setShowAccountPage] = useState(false);
     
     const offersForStartup = (localOffers || investmentOffers || []).filter((o: any) => {
         return (
@@ -137,7 +139,7 @@ const StartupHealthView: React.FC<StartupHealthViewProps> = ({ startup, userRole
     const renderTabContent = () => {
         switch (activeTab) {
             case 'dashboard':
-                return <StartupDashboardTab startup={currentStartup} isViewOnly={isViewOnly} offers={offersForStartup} onProcessOffer={onProcessOffer} />;
+                return <StartupDashboardTab startup={currentStartup} isViewOnly={isViewOnly} offers={offersForStartup} onProcessOffer={onProcessOffer} currentUser={user} />;
             case 'opportunities':
                 return <OpportunitiesTab startup={{ id: currentStartup.id, name: currentStartup.name }} />;
             case 'profile':
@@ -169,6 +171,21 @@ const StartupHealthView: React.FC<StartupHealthViewProps> = ({ startup, userRole
         }
     };
     
+  // If account page is shown, render the account page instead of the main dashboard
+  if (showAccountPage) {
+    return (
+      <StartupProfilePage 
+        currentUser={user} 
+        startup={currentStartup} 
+        onBack={() => setShowAccountPage(false)} 
+        onProfileUpdate={(updatedUser) => {
+          // Handle profile updates if needed
+          console.log('Profile updated:', updatedUser);
+        }}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50">
         <div className="bg-white shadow-sm border-b">
@@ -206,6 +223,19 @@ const StartupHealthView: React.FC<StartupHealthViewProps> = ({ startup, userRole
                         </div>
                     </div>
                     <div className="flex items-center space-x-2 sm:space-x-4 w-full sm:w-auto">
+                        {/* Account Button - Only show for startup users */}
+                        {userRole === 'Startup' && !isViewOnly && (
+                            <Button 
+                                onClick={() => setShowAccountPage(true)} 
+                                variant="outline" 
+                                size="sm" 
+                                className="w-full sm:w-auto"
+                            >
+                                <User className="mr-2 h-4 w-4" />
+                                <span className="hidden sm:inline">Account</span>
+                                <span className="sm:hidden">Account</span>
+                            </Button>
+                        )}
                         {userRole !== 'Startup' && onBack && (
                             <Button onClick={onBack} variant="secondary" size="sm" className="w-full sm:w-auto">
                                 <ArrowLeft className="mr-2 h-4 w-4" />

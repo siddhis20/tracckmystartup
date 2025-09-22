@@ -19,16 +19,34 @@ export const userService = {
   },
 
   // Update user profile
-  async updateUser(userId: string, updates: { name?: string; role?: UserRole }) {
-    const { data, error } = await supabase
-      .from('users')
-      .update(updates)
-      .eq('id', userId)
-      .select()
-      .single()
+  async updateUser(userId: string, updates: any) {
+    console.log('🔄 userService.updateUser called with:', { userId, updates });
+    
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .update(updates)
+        .eq('id', userId)
+        .select()
+        .single()
 
-    if (error) throw error
-    return data
+      if (error) {
+        console.error('❌ Supabase update error:', error);
+        console.error('Error details:', {
+          message: error.message,
+          code: error.code,
+          details: error.details,
+          hint: error.hint
+        });
+        throw error;
+      }
+      
+      console.log('✅ User updated successfully:', data);
+      return data;
+    } catch (error) {
+      console.error('❌ userService.updateUser error:', error);
+      throw error;
+    }
   },
 
   // Get all users (admin only)
@@ -73,6 +91,106 @@ export const userService = {
       console.error('Error in getStartupAdditionRequests:', error)
       return []
     }
+  },
+
+  // Accept investment advisor request
+  async acceptInvestmentAdvisorRequest(userId: string, financialMatrix: any) {
+    console.log('Accepting investment advisor request for user:', userId);
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .update({
+          advisor_accepted: true,
+          minimum_investment: financialMatrix.minimumInvestment,
+          maximum_investment: financialMatrix.maximumInvestment,
+          success_fee: financialMatrix.successFee,
+          success_fee_type: financialMatrix.successFeeType,
+          scouting_fee: financialMatrix.scoutingFee,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', userId)
+        .select()
+        .single()
+
+      if (error) {
+        console.error('Error accepting investment advisor request:', error)
+        throw error
+      }
+      
+      console.log('Investment advisor request accepted successfully:', data);
+      return data
+    } catch (error) {
+      console.error('Error in acceptInvestmentAdvisorRequest:', error)
+      throw error
+    }
+  },
+
+  // Accept startup advisor request
+  async acceptStartupAdvisorRequest(startupId: number, userId: string, financialMatrix: any) {
+    console.log('Accepting startup advisor request for startup:', startupId, 'user:', userId);
+    console.log('🔍 Original financial matrix:', financialMatrix);
+    try {
+      // Validate and clean financial matrix data
+      const cleanFinancialMatrix = {
+        minimum_investment: financialMatrix.minimumInvestment ? parseFloat(financialMatrix.minimumInvestment) : null,
+        maximum_investment: financialMatrix.maximumInvestment ? parseFloat(financialMatrix.maximumInvestment) : null,
+        success_fee: financialMatrix.successFee ? parseFloat(financialMatrix.successFee) : null,
+        success_fee_type: financialMatrix.successFeeType || null,
+        scouting_fee: financialMatrix.scoutingFee ? parseFloat(financialMatrix.scoutingFee) : null
+      };
+
+      console.log('🔍 Cleaned financial matrix:', cleanFinancialMatrix);
+      console.log('🔍 User ID to update:', userId);
+
+      // Update the user's advisor acceptance status
+      const updateData = {
+        advisor_accepted: true,
+        advisor_accepted_date: new Date().toISOString(),
+        minimum_investment: cleanFinancialMatrix.minimum_investment,
+        maximum_investment: cleanFinancialMatrix.maximum_investment,
+        success_fee: cleanFinancialMatrix.success_fee,
+        success_fee_type: cleanFinancialMatrix.success_fee_type,
+        scouting_fee: cleanFinancialMatrix.scouting_fee,
+        updated_at: new Date().toISOString()
+      };
+      
+      console.log('🔍 Update data being sent:', updateData);
+
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .update(updateData)
+        .eq('id', userId)
+        .select()
+        .single()
+
+      if (userError) {
+        console.error('Error updating user advisor acceptance:', userError)
+        throw userError
+      }
+
+      // Create or update the investment advisor relationship
+      const { data: relationshipData, error: relationshipError } = await supabase
+        .from('investment_advisor_relationships')
+        .upsert({
+          investment_advisor_id: (await supabase.auth.getUser()).data.user?.id,
+          startup_id: startupId,
+          relationship_type: 'advisor_startup'
+        }, {
+          onConflict: 'investment_advisor_id,startup_id,relationship_type'
+        })
+        .select()
+
+      if (relationshipError) {
+        console.error('Error creating advisor relationship:', relationshipError)
+        // Don't throw here as the main operation succeeded
+      }
+      
+      console.log('Startup advisor request accepted successfully:', userData);
+      return userData
+    } catch (error) {
+      console.error('Error in acceptStartupAdvisorRequest:', error)
+      throw error
+    }
   }
 }
 
@@ -93,7 +211,8 @@ export const startupService = {
         .from('startups')
         .select(`
           *,
-          founders (*)
+          founders (*),
+          startup_shares (*)
         `)
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
@@ -103,7 +222,12 @@ export const startupService = {
         return [];
       }
       
+      console.log('🚨🚨🚨 DATABASE DEBUGGING - STARTUP DATA 🚨🚨🚨');
       console.log('Startups fetched successfully:', data?.length || 0);
+      console.log('🔍 Raw startup data with shares:', data);
+      console.log('🔍 First startup founders:', data?.[0]?.founders);
+      console.log('🔍 First startup startup_shares:', data?.[0]?.startup_shares);
+      console.log('🚨🚨🚨 END DATABASE DEBUGGING 🚨🚨🚨');
       
       // Map database fields to frontend expected format
       const mappedData = (data || []).map(startup => ({
@@ -118,9 +242,13 @@ export const startupService = {
         totalFunding: Number(startup.total_funding) || 0,
         totalRevenue: Number(startup.total_revenue) || 0,
         registrationDate: startup.registration_date || '',
-        founders: startup.founders || []
+        currency: startup.currency || 'USD', // Include currency field
+        founders: startup.founders || [],
+        // Include shares data from startup_shares table
+        esopReservedShares: startup.startup_shares?.[0]?.esop_reserved_shares || 0
       }));
       
+      console.log('🔍 Mapped startup data with ESOP:', mappedData);
       return mappedData;
     } catch (error) {
       console.error('Error in getAllStartups:', error);
@@ -136,16 +264,19 @@ export const startupService = {
         .from('startups')
         .select(`
           *,
-          founders (*)
+          founders (*),
+          startup_shares (*)
         `)
         .order('created_at', { ascending: false })
 
       if (error) {
         console.error('Error fetching all startups:', error);
+        console.error('Error details:', JSON.stringify(error, null, 2));
         return [];
       }
       
       console.log('All startups fetched successfully:', data?.length || 0);
+      console.log('Raw startup data:', data);
       
       // Map database fields to frontend expected format
       const mappedData = (data || []).map(startup => ({
@@ -160,12 +291,60 @@ export const startupService = {
         totalFunding: startup.total_funding,
         totalRevenue: startup.total_revenue,
         registrationDate: startup.registration_date,
-        founders: startup.founders || []
+        currency: startup.currency || 'USD', // Include currency field
+        founders: startup.founders || [],
+        // Include shares data from startup_shares table
+        esopReservedShares: startup.startup_shares?.[0]?.esop_reserved_shares || 0
       }));
       
       return mappedData;
     } catch (error) {
       console.error('Error in getAllStartupsForAdmin:', error);
+      return [];
+    }
+  },
+
+  // Get all startups for Investment Advisors (using direct table access with RLS policy)
+  async getAllStartupsForInvestmentAdvisor() {
+    console.log('Fetching all startups for Investment Advisor...');
+    try {
+      const { data, error } = await supabase
+        .from('startups')
+        .select(`
+          *,
+          founders (*)
+        `)
+        .order('created_at', { ascending: false })
+
+      if (error) {
+        console.error('Error fetching startups for Investment Advisor:', error);
+        console.error('Error details:', JSON.stringify(error, null, 2));
+        return [];
+      }
+      
+      console.log('Startups fetched successfully for Investment Advisor:', data?.length || 0);
+      console.log('Raw startup data:', data);
+      
+      // Map database fields to frontend expected format
+      const mappedData = (data || []).map(startup => ({
+        id: startup.id,
+        name: startup.name,
+        user_id: startup.user_id,
+        investmentType: startup.investment_type,
+        investmentValue: startup.investment_value,
+        equityAllocation: startup.equity_allocation,
+        currentValuation: startup.current_valuation,
+        complianceStatus: startup.compliance_status,
+        sector: startup.sector,
+        totalFunding: startup.total_funding,
+        totalRevenue: startup.total_revenue,
+        registrationDate: startup.registration_date,
+        founders: startup.founders || []
+      }));
+      
+      return mappedData;
+    } catch (error) {
+      console.error('Error in getAllStartupsForInvestmentAdvisor:', error);
       return [];
     }
   },
@@ -406,13 +585,15 @@ export const investmentService = {
     }
   },
 
-  // Create investment offer
+  // Create investment offer with scouting fee
   async createInvestmentOffer(offerData: {
     investor_email: string
     startup_name: string
     startup_id: number
     offer_amount: number
     equity_percentage: number
+    country?: string
+    startup_amount_raised?: number
   }) {
     console.log('Creating investment offer with data:', offerData);
     
@@ -448,27 +629,16 @@ export const investmentService = {
       }
     }
     
-    console.log('Attempting to insert offer with data:', {
-      investor_email: offerData.investor_email,
-      startup_name: offerData.startup_name,
-      startup_id: offerData.startup_id,
-      offer_amount: offerData.offer_amount,
-      equity_percentage: offerData.equity_percentage,
-      status: 'pending'
+    // Use the new function to create offer with scouting fee
+    const { data, error } = await supabase.rpc('create_investment_offer_with_fee', {
+      p_investor_email: offerData.investor_email,
+      p_startup_name: offerData.startup_name,
+      p_startup_id: offerData.startup_id,
+      p_offer_amount: offerData.offer_amount,
+      p_equity_percentage: offerData.equity_percentage,
+      p_country: offerData.country || 'United States',
+      p_startup_amount_raised: offerData.startup_amount_raised || 0
     });
-
-    const { data, error } = await supabase
-      .from('investment_offers')
-      .insert({
-        investor_email: offerData.investor_email,
-        startup_name: offerData.startup_name,
-        startup_id: offerData.startup_id,
-        offer_amount: offerData.offer_amount,
-        equity_percentage: offerData.equity_percentage,
-        status: 'pending'
-      })
-      .select()
-      .single()
 
     if (error) {
       console.error('Error creating investment offer:', error);
@@ -481,8 +651,20 @@ export const investmentService = {
       throw error;
     }
     
-    console.log('Investment offer created successfully:', data);
-    return data
+    // Get the created offer
+    const { data: createdOffer, error: fetchError } = await supabase
+      .from('investment_offers')
+      .select('*')
+      .eq('id', data)
+      .single();
+    
+    if (fetchError) {
+      console.error('Error fetching created offer:', fetchError);
+      throw fetchError;
+    }
+    
+    console.log('Investment offer created successfully with scouting fee:', createdOffer);
+    return createdOffer;
   },
 
   // Get user's investment offers
@@ -576,7 +758,20 @@ export const investmentService = {
         } : null,
         offerAmount: offer.offer_amount,
         equityPercentage: offer.equity_percentage,
-        status: offer.status
+        status: offer.status,
+        createdAt: offer.created_at,
+        // New scouting fee fields
+        startup_scouting_fee_amount: offer.startup_scouting_fee_amount || 0,
+        investor_scouting_fee_amount: offer.investor_scouting_fee_amount || 0,
+        startup_scouting_fee_paid: offer.startup_scouting_fee_paid || false,
+        investor_scouting_fee_paid: offer.investor_scouting_fee_paid || false,
+        contact_details_revealed: offer.contact_details_revealed || false,
+        contact_details_revealed_at: offer.contact_details_revealed_at,
+        // New approval fields
+        investor_advisor_approval_status: offer.investor_advisor_approval_status || 'not_required',
+        investor_advisor_approval_at: offer.investor_advisor_approval_at,
+        startup_advisor_approval_status: offer.startup_advisor_approval_status || 'not_required',
+        startup_advisor_approval_at: offer.startup_advisor_approval_at
       }));
       
       return mappedData;
@@ -584,6 +779,61 @@ export const investmentService = {
       console.error('Error in getAllInvestmentOffers:', error);
       return [];
     }
+  },
+
+  // Approve/reject offer by investor advisor
+  async approveInvestorAdvisorOffer(offerId: number, action: 'approve' | 'reject') {
+    const { data, error } = await supabase.rpc('approve_investor_advisor_offer', {
+      p_offer_id: offerId,
+      p_approval_action: action
+    });
+
+    if (error) throw error;
+    return data;
+  },
+
+  // Approve/reject offer by startup advisor
+  async approveStartupAdvisorOffer(offerId: number, action: 'approve' | 'reject') {
+    const { data, error } = await supabase.rpc('approve_startup_advisor_offer', {
+      p_offer_id: offerId,
+      p_approval_action: action
+    });
+
+    if (error) throw error;
+    return data;
+  },
+
+  // Recommend co-investment opportunity to investors
+  async recommendCoInvestmentOpportunity(opportunityId: number, advisorId: string, investorIds: string[]) {
+    const { data, error } = await supabase.rpc('recommend_co_investment_opportunity', {
+      p_opportunity_id: opportunityId,
+      p_advisor_id: advisorId,
+      p_investor_ids: investorIds
+    });
+
+    if (error) throw error;
+    return data;
+  },
+
+  // Get recommended co-investment opportunities for an investor
+  async getRecommendedCoInvestmentOpportunities(investorId: string) {
+    const { data, error } = await supabase.rpc('get_recommended_co_investment_opportunities', {
+      p_investor_id: investorId
+    });
+
+    if (error) throw error;
+    return data || [];
+  },
+
+  // Update co-investment recommendation status
+  async updateCoInvestmentRecommendationStatus(recommendationId: number, status: string) {
+    const { data, error } = await supabase.rpc('update_co_investment_recommendation_status', {
+      p_recommendation_id: recommendationId,
+      p_status: status
+    });
+
+    if (error) throw error;
+    return data;
   },
 
   // Get offers for a specific startup (by startup_id)
@@ -622,6 +872,145 @@ export const investmentService = {
       return mapped;
     } catch (e) {
       console.error('Error in getOffersForStartup:', e);
+      return [];
+    }
+  },
+
+  // Accept investment offer with investor scouting fee
+  async acceptOfferWithFee(offerId: number, country: string, startupAmountRaised: number) {
+    try {
+      const { data, error } = await supabase.rpc('accept_investment_offer_with_fee', {
+        p_offer_id: offerId,
+        p_country: country,
+        p_startup_amount_raised: startupAmountRaised
+      });
+
+      if (error) {
+        console.error('Error accepting offer with fee:', error);
+        throw error;
+      }
+
+      return data;
+    } catch (e) {
+      console.error('Error in acceptOfferWithFee:', e);
+      throw e;
+    }
+  },
+
+  // Reject investment offer
+  async rejectOffer(offerId: number) {
+    try {
+      const { data, error } = await supabase
+        .from('investment_offers')
+        .update({ status: 'rejected' })
+        .eq('id', offerId)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error rejecting offer:', error);
+        throw error;
+      }
+
+      // Log the rejection
+      await supabase
+        .from('investment_ledger')
+        .insert({
+          offer_id: offerId,
+          activity_type: 'offer_rejected',
+          description: 'Investment offer rejected by startup'
+        });
+
+      return data;
+    } catch (e) {
+      console.error('Error in rejectOffer:', e);
+      throw e;
+    }
+  },
+
+  // Reveal contact details (for investment advisors)
+  async revealContactDetails(offerId: number) {
+    try {
+      const { data, error } = await supabase.rpc('reveal_contact_details', {
+        p_offer_id: offerId
+      });
+
+      if (error) {
+        console.error('Error revealing contact details:', error);
+        throw error;
+      }
+
+      return data;
+    } catch (e) {
+      console.error('Error in revealContactDetails:', e);
+      throw e;
+    }
+  },
+
+  // Get investment ledger for an offer
+  async getInvestmentLedger(offerId: number) {
+    try {
+      const { data, error } = await supabase
+        .from('investment_ledger')
+        .select('*')
+        .eq('offer_id', offerId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.error('Error getting investment ledger:', error);
+        return [];
+      }
+
+      return data || [];
+    } catch (e) {
+      console.error('Error in getInvestmentLedger:', e);
+      return [];
+    }
+  },
+
+  // Get all active investment offers (for admin)
+  async getAllActiveOffers() {
+    try {
+      const { data, error } = await supabase
+        .from('investment_offers')
+        .select(`
+          *,
+          startup:startups(*)
+        `)
+        .in('status', ['pending', 'accepted'])
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error getting all active offers:', error);
+        return [];
+      }
+
+      return data || [];
+    } catch (e) {
+      console.error('Error in getAllActiveOffers:', e);
+      return [];
+    }
+  },
+
+  // Get investment ledger for all offers (for admin)
+  async getAllInvestmentLedger() {
+    try {
+      const { data, error } = await supabase
+        .from('investment_ledger')
+        .select(`
+          *,
+          offer:investment_offers(*)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Error getting all investment ledger:', error);
+        return [];
+      }
+
+      return data || [];
+    } catch (e) {
+      console.error('Error in getAllInvestmentLedger:', e);
       return [];
     }
   },
@@ -753,7 +1142,19 @@ export const investmentService = {
         offerAmount: offer.offer_amount,
         equityPercentage: offer.equity_percentage,
         status: offer.status,
-        createdAt: offer.created_at
+        createdAt: offer.created_at,
+        // New scouting fee fields
+        startup_scouting_fee_amount: offer.startup_scouting_fee_amount || 0,
+        investor_scouting_fee_amount: offer.investor_scouting_fee_amount || 0,
+        startup_scouting_fee_paid: offer.startup_scouting_fee_paid || false,
+        investor_scouting_fee_paid: offer.investor_scouting_fee_paid || false,
+        contact_details_revealed: offer.contact_details_revealed || false,
+        contact_details_revealed_at: offer.contact_details_revealed_at,
+        // New approval fields
+        investor_advisor_approval_status: offer.investor_advisor_approval_status || 'not_required',
+        investor_advisor_approval_at: offer.investor_advisor_approval_at,
+        startup_advisor_approval_status: offer.startup_advisor_approval_status || 'not_required',
+        startup_advisor_approval_at: offer.startup_advisor_approval_at
       }));
       
       return mappedData;
@@ -1117,6 +1518,13 @@ export const financialService = {
     cogs?: number
     attachment_url?: string
   }) {
+    // Import and validate financial record date (no future dates allowed)
+    const { validateFinancialRecordDate } = await import('./dateValidation');
+    const dateValidation = validateFinancialRecordDate(recordData.date);
+    if (!dateValidation.isValid) {
+      throw new Error(dateValidation.error);
+    }
+
     const { data, error } = await supabase
       .from('financial_records')
       .insert(recordData)
@@ -1155,6 +1563,31 @@ export const employeeService = {
     esop_per_allocation?: number
     contract_url?: string
   }) {
+    // Import and validate joining date (no future dates allowed)
+    const { validateJoiningDate } = await import('./dateValidation');
+    const dateValidation = validateJoiningDate(employeeData.joining_date);
+    if (!dateValidation.isValid) {
+      throw new Error(dateValidation.error);
+    }
+
+    // Validation: Check if employee joining date is before company registration date
+    const { data: startupData, error: startupError } = await supabase
+      .from('startups')
+      .select('registration_date')
+      .eq('id', employeeData.startup_id)
+      .single()
+
+    if (startupError) throw startupError
+
+    if (startupData?.registration_date && employeeData.joining_date) {
+      const joiningDate = new Date(employeeData.joining_date)
+      const registrationDate = new Date(startupData.registration_date)
+      
+      if (joiningDate < registrationDate) {
+        throw new Error(`Employee joining date cannot be before the company registration date (${startupData.registration_date}). Please select a date on or after the registration date.`)
+      }
+    }
+
     const { data, error } = await supabase
       .from('employees')
       .insert(employeeData)

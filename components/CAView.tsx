@@ -6,7 +6,8 @@ import { investorService, ActiveFundraisingStartup } from '../lib/investorServic
 import Card from './ui/Card';
 import Button from './ui/Button';
 import ProfilePage from './ProfilePage';
-import { FileText, CheckCircle, XCircle, AlertTriangle, DollarSign, UserCheck, Plus, Search, Filter, Menu, Film, Video, Heart } from 'lucide-react';
+import ComplianceSubmissionButton from './ComplianceSubmissionButton';
+import { FileText, CheckCircle, XCircle, AlertTriangle, DollarSign, UserCheck, Plus, Search, Filter, Menu, Film, Video, Heart, Share2 } from 'lucide-react';
 
 interface CAViewProps {
   startups: Startup[];
@@ -43,6 +44,42 @@ const CAView: React.FC<CAViewProps> = ({ startups, onUpdateCompliance, onViewSta
   const [pitches, setPitches] = useState<ActiveFundraisingStartup[]>([]);
   const [isLoadingPitches, setIsLoadingPitches] = useState(false);
   const [favoritedPitches, setFavoritedPitches] = useState<Set<number>>(new Set());
+
+  const handleShare = async (startup: ActiveFundraisingStartup) => {
+    console.log('Share button clicked for startup:', startup.name);
+    console.log('Startup object:', startup);
+    const videoUrl = startup.pitchVideoUrl || 'Video not available';
+    const details = `Startup: ${startup.name || 'N/A'}\nSector: ${startup.sector || 'N/A'}\nAsk: $${(startup.investmentValue || 0).toLocaleString()} for ${startup.equityAllocation || 0}% equity\nValuation: $${(startup.currentValuation || 0).toLocaleString()}\n\nPitch Video: ${videoUrl}`;
+    console.log('Share details:', details);
+        try {
+            if (navigator.share) {
+                console.log('Using native share API');
+                const shareData = {
+                    title: startup.name || 'Startup Pitch',
+                    text: details,
+                    url: videoUrl !== 'Video not available' ? videoUrl : undefined
+                };
+                await navigator.share(shareData);
+            } else if (navigator.clipboard && navigator.clipboard.writeText) {
+        console.log('Using clipboard API');
+        await navigator.clipboard.writeText(details);
+        alert('Startup details copied to clipboard');
+      } else {
+        console.log('Using fallback copy method');
+        // Fallback: hidden textarea copy
+        const textarea = document.createElement('textarea');
+        textarea.value = details;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        alert('Startup details copied to clipboard');
+      }
+    } catch (err) {
+      console.error('Share failed', err);
+      alert('Unable to share. Try copying manually.');
+    }
+  };
 
   // Load CA data on component mount
   useEffect(() => {
@@ -417,6 +454,13 @@ const CAView: React.FC<CAViewProps> = ({ startups, onUpdateCompliance, onViewSta
         </Card>
       </div>
 
+      {/* Compliance Submission Button */}
+      <ComplianceSubmissionButton 
+        currentUser={currentUser} 
+        userRole="CA" 
+        className="mb-6"
+      />
+
       {/* Tab Navigation */}
       <Card className="p-4">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
@@ -672,6 +716,20 @@ const CAView: React.FC<CAViewProps> = ({ startups, onUpdateCompliance, onViewSta
               <p className="text-sm text-slate-600">Watch startup videos and explore opportunities</p>
                   </div>
                   
+                  {/* Search Bar */}
+                  <div className="mb-6">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search startups by name or sector..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
+                      />
+                    </div>
+                  </div>
+                  
                         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between bg-gradient-to-r from-blue-50 to-purple-50 p-4 rounded-xl border border-blue-100 gap-4">
               <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-4">
                 <div className="flex flex-wrap items-center gap-2 sm:gap-3">
@@ -735,9 +793,26 @@ const CAView: React.FC<CAViewProps> = ({ startups, onUpdateCompliance, onViewSta
           </div>
 
           <div className="space-y-8">
-            {(showOnlyValidated ? pitches.filter(p => p.isStartupNationValidated) : 
-              showOnlyFavorites ? pitches.filter(p => favoritedPitches.has(p.id)) : 
-              pitches).map(inv => {
+            {(() => {
+              let filteredPitches = pitches;
+              
+              // Apply search filter
+              if (searchTerm.trim()) {
+                filteredPitches = filteredPitches.filter(p => 
+                  p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                  p.sector.toLowerCase().includes(searchTerm.toLowerCase())
+                );
+              }
+              
+              // Apply other filters
+              if (showOnlyValidated) {
+                filteredPitches = filteredPitches.filter(p => p.isStartupNationValidated);
+              } else if (showOnlyFavorites) {
+                filteredPitches = filteredPitches.filter(p => favoritedPitches.has(p.id));
+              }
+              
+              return filteredPitches;
+            })().map(inv => {
               const embedUrl = investorService.getYoutubeEmbedUrl(inv.pitchVideoUrl);
               return (
                 <Card key={inv.fundraisingId} className="!p-0 overflow-hidden shadow-lg hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1 border-0 bg-white">
@@ -832,6 +907,17 @@ const CAView: React.FC<CAViewProps> = ({ startups, onUpdateCompliance, onViewSta
                         <Heart className={`h-5 w-5 ${favoritedPitches.has(inv.id) ? 'fill-current' : ''}`} />
                         {favoritedPitches.has(inv.id) && <span className="text-xs">Liked</span>}
                       </button>
+                      
+                      {/* Share Button */}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleShare(inv)}
+                        className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 shadow-sm bg-white text-slate-600 hover:bg-blue-50 hover:text-blue-600 border border-slate-200 hover:border-blue-200"
+                      >
+                        <Share2 className="h-5 w-5" />
+                        Share
+                      </Button>
                       
                       {inv.pitchDeckUrl && inv.pitchDeckUrl !== '#' && (
                         <a href={inv.pitchDeckUrl} target="_blank" rel="noreferrer">

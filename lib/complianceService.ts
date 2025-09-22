@@ -411,7 +411,13 @@ class ComplianceService {
             
             // Generate tasks from profile
             const generatedTasks = await this.generateComplianceTasksFromProfile(startupId);
-            
+
+            // SAFETY: If generation produced no tasks, do NOT delete existing ones
+            if (!generatedTasks || generatedTasks.length === 0) {
+                console.warn('⚠️ Generated 0 compliance tasks. Skipping deletion to avoid wiping existing data.');
+                return true;
+            }
+
             // Clear existing tasks for this startup
             const { error: deleteError } = await supabase
                 .from('compliance_checks')
@@ -442,7 +448,7 @@ class ComplianceService {
                 
                 const { error: insertError } = await supabase
                     .from('compliance_checks')
-                    .insert(taskRecords);
+                    .upsert(taskRecords, { onConflict: 'startup_id,task_id,entity_identifier,year' });
                 
                 if (insertError) {
                     console.error('Error inserting compliance tasks:', insertError);

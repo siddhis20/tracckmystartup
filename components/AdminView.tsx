@@ -4,11 +4,14 @@ import { ValidationRequest } from '../lib/validationService';
 import Card from './ui/Card';
 import Button from './ui/Button';
 import Badge from './ui/Badge';
-import { Users, Building2, HelpCircle, FileCheck2, LayoutGrid, Eye, Check, X, UserCheck, NotebookPen, BookUser, FileStack, Database, Shield, Settings } from 'lucide-react';
+import { Users, Building2, HelpCircle, FileCheck2, LayoutGrid, Eye, Check, X, UserCheck, NotebookPen, BookUser, FileStack, Database, Shield, Settings, DollarSign, TrendingUp, AlertTriangle, BarChart3, UserPlus, Building, CreditCard, MessageSquare, Calendar, Globe, Target, Zap } from 'lucide-react';
 import UserGrowthChart from './admin/UserGrowthChart';
 import UserRoleDistributionChart from './admin/UserRoleDistributionChart';
 import DataManager from './DataManager';
-import { complianceRulesService } from '../lib/complianceRulesService';
+import { complianceRulesComprehensiveService } from '../lib/complianceRulesComprehensiveService';
+import { complianceManagementService, AuditorType, GovernanceType, CompanyType, ComplianceRule } from '../lib/complianceManagementService';
+import ComplianceRulesComprehensiveManager from './ComplianceRulesComprehensiveManager';
+import FinancialModelAdmin from './FinancialModelAdmin';
 
 
 interface AdminViewProps {
@@ -23,7 +26,7 @@ interface AdminViewProps {
   onViewStartup: (id: number) => void;
 }
 
-type AdminTab = 'dashboard' | 'users' | 'verifications' | 'offers' | 'validations' | 'data' | 'complianceRules';
+type AdminTab = 'dashboard' | 'userManagement' | 'startupManagement' | 'investmentFlow' | 'compliance' | 'financial' | 'analytics' | 'system';
 type TimeFilter = '30d' | '90d' | 'all';
 
 const SummaryCard: React.FC<{ title: string; value: string | number; icon: React.ReactNode }> = ({ title, value, icon }) => (
@@ -40,17 +43,22 @@ const SummaryCard: React.FC<{ title: string; value: string | number; icon: React
     </Card>
 );
 
-const formatCurrency = (value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact' }).format(value);
+const formatCurrency = (value: number, currency: string = 'USD') => new Intl.NumberFormat('en-US', { style: 'currency', currency: currency, notation: 'compact' }).format(value);
 
 const AdminView: React.FC<AdminViewProps> = ({ users, startups, verificationRequests, investmentOffers, validationRequests, onProcessVerification, onProcessOffer, onProcessValidationRequest, onViewStartup }) => {
     const [activeTab, setActiveTab] = useState<AdminTab>('dashboard');
     const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
 
     const investorCount = useMemo(() => users.filter(u => u.role === 'Investor').length, [users]);
+    const startupCount = useMemo(() => users.filter(u => u.role === 'Startup').length, [users]);
     const caCount = useMemo(() => users.filter(u => u.role === 'CA').length, [users]);
     const csCount = useMemo(() => users.filter(u => u.role === 'CS').length, [users]);
+    const facilitationCenterCount = useMemo(() => users.filter(u => u.role === 'Startup Facilitation Center').length, [users]);
+    const investmentAdvisorCount = useMemo(() => users.filter(u => u.role === 'Investment Advisor').length, [users]);
     const totalOffers = investmentOffers.length;
     const pendingValidations = validationRequests.filter(v => v.status === 'pending').length;
+    const pendingVerifications = verificationRequests.length;
+    const pendingOffers = investmentOffers.filter(o => o.status === 'pending').length;
     
     const filteredUsers = useMemo(() => {
         if (timeFilter === 'all') {
@@ -65,39 +73,53 @@ const AdminView: React.FC<AdminViewProps> = ({ users, startups, verificationRequ
     const renderTabContent = () => {
         switch (activeTab) {
             case 'dashboard': return <DashboardTab startups={startups} users={filteredUsers} onViewStartup={onViewStartup} timeFilter={timeFilter} setTimeFilter={setTimeFilter} />;
-            case 'users': return <UsersTab users={users} />;
-            case 'verifications': return <VerificationsTab requests={verificationRequests} onProcessVerification={onProcessVerification} />;
-            case 'offers': return <OffersTab offers={investmentOffers} onProcessOffer={onProcessOffer} />;
-            case 'validations': return <ValidationsTab requests={validationRequests} onProcessValidationRequest={onProcessValidationRequest} />;
-            case 'data': return <DataManager />;
-            case 'complianceRules': return <ComplianceRulesManager />;
+            case 'userManagement': return <UserManagementTab users={users} />;
+            case 'startupManagement': return <StartupManagementTab startups={startups} verificationRequests={verificationRequests} validationRequests={validationRequests} onProcessVerification={onProcessVerification} onProcessValidationRequest={onProcessValidationRequest} onViewStartup={onViewStartup} />;
+            case 'investmentFlow': return <InvestmentFlowTab offers={investmentOffers} onProcessOffer={onProcessOffer} />;
+            case 'compliance': return <ComplianceTab />;
+            case 'financial': return <FinancialTab />;
+            case 'analytics': return <AnalyticsTab users={filteredUsers} startups={startups} offers={investmentOffers} timeFilter={timeFilter} setTimeFilter={setTimeFilter} />;
+            case 'system': return <SystemTab />;
             default: return null;
         }
     }
     
     return (
         <div className="space-y-6">
-             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
+            {/* Key Metrics Overview */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                 <SummaryCard title="Total Users" value={users.length} icon={<Users className="h-6 w-6 text-brand-primary" />} />
-                <SummaryCard title="Total Startups" value={startups.length} icon={<Building2 className="h-6 w-6 text-brand-primary" />} />
+                <SummaryCard title="Total Startups" value={startupCount} icon={<Building2 className="h-6 w-6 text-brand-primary" />} />
                 <SummaryCard title="Total Investors" value={investorCount} icon={<UserCheck className="h-6 w-6 text-brand-primary" />} />
-                <SummaryCard title="Total CAs" value={caCount} icon={<NotebookPen className="h-6 w-6 text-brand-primary" />} />
-                <SummaryCard title="Total CSs" value={csCount} icon={<BookUser className="h-6 w-6 text-brand-primary" />} />
-                <SummaryCard title="Pending Verifications" value={verificationRequests.length} icon={<HelpCircle className="h-6 w-6 text-brand-primary" />} />
-                <SummaryCard title="Pending Offers" value={investmentOffers.filter(o => o.status === 'pending').length} icon={<FileCheck2 className="h-6 w-6 text-brand-primary" />} />
-                <SummaryCard title="Pending Validations" value={pendingValidations} icon={<Shield className="h-6 w-6 text-brand-primary" />} />
-                <SummaryCard title="All Submitted Offers" value={totalOffers} icon={<FileStack className="h-6 w-6 text-brand-primary" />} />
+                <SummaryCard title="Investment Advisors" value={investmentAdvisorCount} icon={<TrendingUp className="h-6 w-6 text-brand-primary" />} />
+            </div>
+
+            {/* Service Providers & Centers */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <SummaryCard title="CAs (Auditors)" value={caCount} icon={<NotebookPen className="h-6 w-6 text-brand-primary" />} />
+                <SummaryCard title="CSs (Governance)" value={csCount} icon={<BookUser className="h-6 w-6 text-brand-primary" />} />
+                <SummaryCard title="Facilitation Centers" value={facilitationCenterCount} icon={<Building className="h-6 w-6 text-brand-primary" />} />
+                <SummaryCard title="Total Startups (Entities)" value={startups.length} icon={<FileStack className="h-6 w-6 text-brand-primary" />} />
+            </div>
+
+            {/* Pending Actions */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <SummaryCard title="Pending Verifications" value={pendingVerifications} icon={<HelpCircle className="h-6 w-6 text-yellow-600" />} />
+                <SummaryCard title="Pending Offers" value={pendingOffers} icon={<FileCheck2 className="h-6 w-6 text-yellow-600" />} />
+                <SummaryCard title="Pending Validations" value={pendingValidations} icon={<Shield className="h-6 w-6 text-yellow-600" />} />
+                <SummaryCard title="Total Offers" value={totalOffers} icon={<Target className="h-6 w-6 text-brand-primary" />} />
             </div>
 
             <div className="border-b border-slate-200">
-                <nav className="-mb-px flex space-x-6" aria-label="Tabs">
+                <nav className="-mb-px flex flex-wrap space-x-6" aria-label="Tabs">
                     <TabButton id="dashboard" activeTab={activeTab} setActiveTab={setActiveTab} icon={<LayoutGrid />}>Dashboard</TabButton>
-                    <TabButton id="users" activeTab={activeTab} setActiveTab={setActiveTab} icon={<Users />}>User Management</TabButton>
-                    <TabButton id="verifications" activeTab={activeTab} setActiveTab={setActiveTab} icon={<FileCheck2 />}>Verifications</TabButton>
-                    <TabButton id="offers" activeTab={activeTab} setActiveTab={setActiveTab} icon={<HelpCircle />}>Offer Approvals</TabButton>
-                    <TabButton id="validations" activeTab={activeTab} setActiveTab={setActiveTab} icon={<Shield />}>Startup Nation Validations</TabButton>
-                    <TabButton id="data" activeTab={activeTab} setActiveTab={setActiveTab} icon={<Database />}>Data Management</TabButton>
-                    <TabButton id="complianceRules" activeTab={activeTab} setActiveTab={setActiveTab} icon={<Settings />}>Compliance Rules</TabButton>
+                    <TabButton id="userManagement" activeTab={activeTab} setActiveTab={setActiveTab} icon={<Users />}>User Management</TabButton>
+                    <TabButton id="startupManagement" activeTab={activeTab} setActiveTab={setActiveTab} icon={<Building2 />}>Startup Management</TabButton>
+                    <TabButton id="investmentFlow" activeTab={activeTab} setActiveTab={setActiveTab} icon={<TrendingUp />}>Investment Flow</TabButton>
+                    <TabButton id="compliance" activeTab={activeTab} setActiveTab={setActiveTab} icon={<Shield />}>Compliance</TabButton>
+                    <TabButton id="financial" activeTab={activeTab} setActiveTab={setActiveTab} icon={<DollarSign />}>Financial</TabButton>
+                    <TabButton id="analytics" activeTab={activeTab} setActiveTab={setActiveTab} icon={<BarChart3 />}>Analytics</TabButton>
+                    <TabButton id="system" activeTab={activeTab} setActiveTab={setActiveTab} icon={<Settings />}>System</TabButton>
                 </nav>
             </div>
 
@@ -210,7 +232,59 @@ const DashboardTab: React.FC<{
 );
 
 
-const UsersTab: React.FC<{ users: User[] }> = ({ users }) => (
+const UserManagementTab: React.FC<{ users: User[] }> = ({ users }) => {
+    const [roleFilter, setRoleFilter] = useState<UserRole | 'All'>('All');
+    const [searchTerm, setSearchTerm] = useState('');
+
+    const filteredUsers = users.filter(user => {
+        const matchesRole = roleFilter === 'All' || user.role === roleFilter;
+        const matchesSearch = user.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                             user.email.toLowerCase().includes(searchTerm.toLowerCase());
+        return matchesRole && matchesSearch;
+    });
+
+    const roleCounts = users.reduce((acc, user) => {
+        acc[user.role] = (acc[user.role] || 0) + 1;
+        return acc;
+    }, {} as Record<UserRole, number>);
+
+    return (
+        <div className="space-y-6">
+            {/* Filters and Search */}
+            <Card>
+                <div className="flex flex-wrap gap-4 items-center justify-between">
+                    <div className="flex gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Filter by Role</label>
+                            <select
+                                value={roleFilter}
+                                onChange={(e) => setRoleFilter(e.target.value as UserRole | 'All')}
+                                className="px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                                <option value="All">All Roles ({users.length})</option>
+                                {Object.entries(roleCounts).map(([role, count]) => (
+                                    <option key={role} value={role}>{role} ({count})</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Search Users</label>
+                            <input
+                                type="text"
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                placeholder="Search by name or email..."
+                                className="px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-64"
+                            />
+                        </div>
+                    </div>
+                    <div className="text-sm text-slate-600">
+                        Showing {filteredUsers.length} of {users.length} users
+                    </div>
+                </div>
+            </Card>
+
+            {/* Users Table */}
     <Card>
         <h3 className="text-lg font-semibold mb-4 text-slate-700">User Management</h3>
         <div className="overflow-x-auto">
@@ -220,23 +294,47 @@ const UsersTab: React.FC<{ users: User[] }> = ({ users }) => (
                         <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Name</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Email</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Role</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Service Code</th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Registration Date</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Actions</th>
                     </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-slate-200">
-                    {users.map(u => (
+                            {filteredUsers.map(u => (
                         <tr key={u.id}>
                             <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">{u.name}</td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{u.email}</td>
-                            <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{u.role}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                        <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
+                                            u.role === 'Admin' ? 'bg-purple-100 text-purple-800' :
+                                            u.role === 'Investor' ? 'bg-green-100 text-green-800' :
+                                            u.role === 'Startup' ? 'bg-blue-100 text-blue-800' :
+                                            u.role === 'Investment Advisor' ? 'bg-orange-100 text-orange-800' :
+                                            u.role === 'Startup Facilitation Center' ? 'bg-indigo-100 text-indigo-800' :
+                                            'bg-gray-100 text-gray-800'
+                                        }`}>
+                                            {u.role}
+                                        </span>
+                                    </td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                        {u.serviceCode || u.investorCode || u.caCode || '-'}
+                                    </td>
                             <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{u.registrationDate}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                        <Button size="sm" variant="outline">
+                                            <Eye className="h-4 w-4 mr-1" />
+                                            View
+                                        </Button>
+                                    </td>
                         </tr>
                     ))}
                 </tbody>
             </table>
         </div>
     </Card>
+        </div>
 );
+};
 
 const VerificationsTab: React.FC<{ requests: VerificationRequest[], onProcessVerification: AdminViewProps['onProcessVerification'] }> = ({ requests, onProcessVerification }) => (
      <Card>
@@ -409,223 +507,1208 @@ const ValidationsTab: React.FC<{ requests: ValidationRequest[], onProcessValidat
     );
 };
 
+// New Optimized Tab Components
+
+const StartupManagementTab: React.FC<{
+    startups: Startup[];
+    verificationRequests: VerificationRequest[];
+    validationRequests: ValidationRequest[];
+    onProcessVerification: AdminViewProps['onProcessVerification'];
+    onProcessValidationRequest: AdminViewProps['onProcessValidationRequest'];
+    onViewStartup: (id: number) => void;
+}> = ({ startups, verificationRequests, validationRequests, onProcessVerification, onProcessValidationRequest, onViewStartup }) => {
+    const [activeSubTab, setActiveSubTab] = useState<'startups' | 'verifications' | 'validations'>('startups');
+
+    return (
+        <div className="space-y-6">
+            {/* Sub-tabs */}
+            <div className="border-b border-slate-200">
+                <nav className="-mb-px flex space-x-6">
+                    <button
+                        onClick={() => setActiveSubTab('startups')}
+                        className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                            activeSubTab === 'startups'
+                                ? 'border-blue-500 text-blue-600'
+                                : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                        }`}
+                    >
+                        <Building2 className="h-4 w-4 inline mr-2" />
+                        All Startups ({startups.length})
+                    </button>
+                    <button
+                        onClick={() => setActiveSubTab('verifications')}
+                        className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                            activeSubTab === 'verifications'
+                                ? 'border-blue-500 text-blue-600'
+                                : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                        }`}
+                    >
+                        <HelpCircle className="h-4 w-4 inline mr-2" />
+                        Verifications ({verificationRequests.length})
+                    </button>
+                    <button
+                        onClick={() => setActiveSubTab('validations')}
+                        className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                            activeSubTab === 'validations'
+                                ? 'border-blue-500 text-blue-600'
+                                : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                        }`}
+                    >
+                        <Shield className="h-4 w-4 inline mr-2" />
+                        Validations ({validationRequests.filter(v => v.status === 'pending').length})
+                    </button>
+                </nav>
+            </div>
+
+            {/* Content based on active sub-tab */}
+            {activeSubTab === 'startups' && (
+                <Card>
+                    <h3 className="text-lg font-semibold mb-4 text-slate-700">All Startups</h3>
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-slate-200">
+                            <thead className="bg-slate-50">
+                                <tr>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Name</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Sector</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Valuation</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Status</th>
+                                    <th className="px-6 py-3 text-right text-xs font-medium text-slate-500 uppercase tracking-wider">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-slate-200">
+                                {startups.map(s => (
+                                    <tr key={s.id}>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">{s.name}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{s.sector}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{formatCurrency(s.currentValuation)}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500"><Badge status={s.complianceStatus} /></td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                            <Button size="sm" variant="outline" onClick={() => onViewStartup(s.id)}>
+                                                <Eye className="mr-2 h-4 w-4" /> View Details
+                                            </Button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </Card>
+            )}
+
+            {activeSubTab === 'verifications' && (
+                <VerificationsTab requests={verificationRequests} onProcessVerification={onProcessVerification} />
+            )}
+
+            {activeSubTab === 'validations' && (
+                <ValidationsTab requests={validationRequests} onProcessValidationRequest={onProcessValidationRequest} />
+            )}
+        </div>
+    );
+};
+
+const InvestmentFlowTab: React.FC<{
+    offers: InvestmentOffer[];
+    onProcessOffer: AdminViewProps['onProcessOffer'];
+}> = ({ offers, onProcessOffer }) => {
+    const [activeTab, setActiveTab] = useState<'activeOffers' | 'ledger'>('activeOffers');
+    const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'accepted' | 'rejected'>('all');
+    
+    // Filter for active offers (pending and accepted)
+    const activeOffers = offers.filter(offer => 
+        offer.status === 'pending' || offer.status === 'accepted'
+    );
+    
+    const filteredOffers = activeOffers.filter(offer => 
+        statusFilter === 'all' || offer.status === statusFilter
+    );
+
+    const statusCounts = activeOffers.reduce((acc, offer) => {
+        acc[offer.status] = (acc[offer.status] || 0) + 1;
+        return acc;
+    }, {} as Record<string, number>);
+
+    return (
+        <div className="space-y-6">
+            {/* Tab Navigation */}
+            <div className="border-b border-gray-200">
+                <nav className="-mb-px flex space-x-8">
+                    <button
+                        onClick={() => setActiveTab('activeOffers')}
+                        className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                            activeTab === 'activeOffers'
+                                ? 'border-blue-500 text-blue-600'
+                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                        }`}
+                    >
+                        Active Investment Offers
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('ledger')}
+                        className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                            activeTab === 'ledger'
+                                ? 'border-blue-500 text-blue-600'
+                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                        }`}
+                    >
+                        Investment Ledger
+                    </button>
+                </nav>
+            </div>
+
+            {/* Active Offers Tab */}
+            {activeTab === 'activeOffers' && (
+        <div className="space-y-6">
+            {/* Filters */}
+            <Card>
+                <div className="flex flex-wrap gap-4 items-center justify-between">
+                    <div className="flex gap-4">
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Filter by Status</label>
+                            <select
+                                value={statusFilter}
+                                onChange={(e) => setStatusFilter(e.target.value as any)}
+                                className="px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                                <option value="all">All Active Offers ({activeOffers.length})</option>
+                                <option value="pending">Pending ({statusCounts.pending || 0})</option>
+                                <option value="accepted">Accepted ({statusCounts.accepted || 0})</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div className="text-sm text-slate-600">
+                        Showing {filteredOffers.length} of {activeOffers.length} active offers
+                    </div>
+                </div>
+            </Card>
+
+                    {/* Active Offers Table */}
+                    <Card>
+                        <h3 className="text-lg font-semibold mb-4 text-slate-700">Active Investment Offers</h3>
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-slate-200">
+                                <thead className="bg-slate-50">
+                                    <tr>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Startup</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Investor</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Offer Amount</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Equity %</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Scouting Fees</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Status</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Date</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-slate-200">
+                                    {filteredOffers.map((offer) => (
+                                        <tr key={offer.id}>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">
+                                                {offer.startupName}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                {offer.investorEmail}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">
+                                                {formatCurrency(offer.offerAmount)}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">
+                                                {offer.equityPercentage}%
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                <div className="text-xs">
+                                                    <div>Startup: {formatCurrency((offer as any).startup_scouting_fee_paid || 0)}</div>
+                                                    <div>Investor: {formatCurrency((offer as any).investor_scouting_fee_paid || 0)}</div>
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap">
+                                                <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                                                    offer.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                                                    offer.status === 'accepted' ? 'bg-green-100 text-green-800' :
+                                                    'bg-red-100 text-red-800'
+                                                }`}>
+                                                    {offer.status}
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                {new Date(offer.createdAt).toLocaleDateString()}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </Card>
+                </div>
+            )}
+
+            {/* Investment Ledger Tab */}
+            {activeTab === 'ledger' && (
+                <div className="space-y-6">
+                    <Card>
+                        <h3 className="text-lg font-semibold mb-4 text-slate-700">Investment Ledger</h3>
+                        <p className="text-sm text-slate-600 mb-4">
+                            Complete transaction history of all investment activities including offers, scouting fees, and status changes.
+                        </p>
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-slate-200">
+                                <thead className="bg-slate-50">
+                                    <tr>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Date</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Activity</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Startup</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Investor</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Amount</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Description</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-slate-200">
+                                    {offers.map((offer) => (
+                                        <React.Fragment key={offer.id}>
+                                            {/* Offer Made */}
+                                            <tr>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                    {new Date(offer.createdAt).toLocaleDateString()}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">
+                                                    Offer Made
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                    {offer.startupName}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                    {offer.investorEmail}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">
+                                                    {formatCurrency(offer.offerAmount)}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                    Investment offer for {offer.equityPercentage}% equity
+                                                </td>
+                                            </tr>
+                                            
+                                            {/* Startup Scouting Fee */}
+                                            {(offer as any).startup_scouting_fee_paid > 0 && (
+                                                <tr>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        {new Date((offer as any).startup_scouting_fee_payment_date || offer.createdAt).toLocaleDateString()}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-blue-600">
+                                                        Startup Scouting Fee
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        {offer.startupName}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        {offer.investorEmail}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">
+                                                        {formatCurrency((offer as any).startup_scouting_fee_paid)}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        Paid by investor when making offer
+                                                    </td>
+                                                </tr>
+                                            )}
+                                            
+                                            {/* Offer Status Change */}
+                                            {offer.status !== 'pending' && (
+                                                <tr>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        {new Date(offer.updatedAt || offer.createdAt).toLocaleDateString()}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">
+                                                        Offer {offer.status === 'accepted' ? 'Accepted' : 'Rejected'}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        {offer.startupName}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        {offer.investorEmail}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">
+                                                        —
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        {offer.status === 'accepted' ? 'Startup accepted the investment offer' : 'Startup rejected the investment offer'}
+                                                    </td>
+                                                </tr>
+                                            )}
+                                            
+                                            {/* Investor Scouting Fee */}
+                                            {offer.status === 'accepted' && (offer as any).investor_scouting_fee_paid > 0 && (
+                                                <tr>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        {new Date((offer as any).investor_scouting_fee_payment_date || offer.updatedAt || offer.createdAt).toLocaleDateString()}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">
+                                                        Investor Scouting Fee
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        {offer.startupName}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        {offer.investorEmail}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">
+                                                        {formatCurrency((offer as any).investor_scouting_fee_paid)}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        Paid by startup when accepting offer
+                                                    </td>
+                                                </tr>
+                                            )}
+                                            
+                                            {/* Contact Details Revealed */}
+                                            {(offer as any).contact_details_revealed && (
+                                                <tr>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        {new Date((offer as any).contact_details_revealed_date || offer.updatedAt || offer.createdAt).toLocaleDateString()}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-purple-600">
+                                                        Contact Details Revealed
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        {offer.startupName}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        {offer.investorEmail}
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">
+                                                        —
+                                                    </td>
+                                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                                        Contact information shared between parties
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </React.Fragment>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </Card>
+                </div>
+            )}
+        </div>
+    );
+};
+
+const ComplianceTab: React.FC = () => {
+    return <ComplianceRulesComprehensiveManager />;
+};
+
+const FinancialTab: React.FC = () => {
+    return <FinancialModelAdmin currentUser={null} />;
+};
+
+const AnalyticsTab: React.FC<{
+    users: User[];
+    startups: Startup[];
+    offers: InvestmentOffer[];
+    timeFilter: TimeFilter;
+    setTimeFilter: (filter: TimeFilter) => void;
+}> = ({ users, startups, offers, timeFilter, setTimeFilter }) => {
+    return (
+        <div className="space-y-6">
+            <Card>
+                <div className="flex flex-wrap justify-between items-center mb-4 gap-4">
+                    <h3 className="text-lg font-semibold text-slate-700">Platform Analytics</h3>
+                    <div className="flex items-center gap-2">
+                        <TimeFilterButton filter="30d" currentFilter={timeFilter} setTimeFilter={setTimeFilter}>30 Days</TimeFilterButton>
+                        <TimeFilterButton filter="90d" currentFilter={timeFilter} setTimeFilter={setTimeFilter}>90 Days</TimeFilterButton>
+                        <TimeFilterButton filter="all" currentFilter={timeFilter} setTimeFilter={setTimeFilter}>All Time</TimeFilterButton>
+                    </div>
+                </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <UserGrowthChart users={users} />
+                    <UserRoleDistributionChart users={users} />
+                </div>
+            </Card>
+
+            {/* Additional Analytics */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <Card>
+                    <h3 className="text-lg font-semibold mb-4 text-slate-700">Investment Activity</h3>
+                    <div className="space-y-4">
+                        <div className="flex justify-between items-center">
+                            <span className="text-sm text-slate-600">Total Investment Offers</span>
+                            <span className="font-semibold">{offers.length}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-sm text-slate-600">Pending Offers</span>
+                            <span className="font-semibold text-yellow-600">{offers.filter(o => o.status === 'pending').length}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-sm text-slate-600">Approved Offers</span>
+                            <span className="font-semibold text-green-600">{offers.filter(o => o.status === 'approved').length}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-sm text-slate-600">Total Investment Value</span>
+                            <span className="font-semibold">{formatCurrency(offers.reduce((sum, offer) => sum + offer.offerAmount, 0))}</span>
+                        </div>
+                    </div>
+                </Card>
+
+                <Card>
+                    <h3 className="text-lg font-semibold mb-4 text-slate-700">Startup Metrics</h3>
+                    <div className="space-y-4">
+                        <div className="flex justify-between items-center">
+                            <span className="text-sm text-slate-600">Total Startups</span>
+                            <span className="font-semibold">{startups.length}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-sm text-slate-600">Average Valuation</span>
+                            <span className="font-semibold">{formatCurrency(startups.reduce((sum, s) => sum + s.currentValuation, 0) / startups.length || 0)}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-sm text-slate-600">Total Funding Raised</span>
+                            <span className="font-semibold">{formatCurrency(startups.reduce((sum, s) => sum + s.totalFunding, 0))}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-sm text-slate-600">Total Revenue</span>
+                            <span className="font-semibold">{formatCurrency(startups.reduce((sum, s) => sum + s.totalRevenue, 0))}</span>
+                        </div>
+                    </div>
+                </Card>
+            </div>
+        </div>
+    );
+};
+
+const SystemTab: React.FC = () => {
+    return (
+        <div className="space-y-6">
+            <Card>
+                <h3 className="text-lg font-semibold mb-4 text-slate-700">System Management</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div className="p-4 border border-slate-200 rounded-lg">
+                        <Database className="h-8 w-8 text-blue-600 mb-2" />
+                        <h4 className="font-semibold text-slate-700">Data Management</h4>
+                        <p className="text-sm text-slate-600 mt-1">Manage platform data and exports</p>
+                        <Button size="sm" className="mt-2" variant="outline">
+                            <Database className="h-4 w-4 mr-1" />
+                            Access
+                        </Button>
+                    </div>
+                    
+                    <div className="p-4 border border-slate-200 rounded-lg">
+                        <Settings className="h-8 w-8 text-green-600 mb-2" />
+                        <h4 className="font-semibold text-slate-700">System Settings</h4>
+                        <p className="text-sm text-slate-600 mt-1">Configure platform settings</p>
+                        <Button size="sm" className="mt-2" variant="outline">
+                            <Settings className="h-4 w-4 mr-1" />
+                            Configure
+                        </Button>
+                    </div>
+                    
+                    <div className="p-4 border border-slate-200 rounded-lg">
+                        <AlertTriangle className="h-8 w-8 text-yellow-600 mb-2" />
+                        <h4 className="font-semibold text-slate-700">System Health</h4>
+                        <p className="text-sm text-slate-600 mt-1">Monitor system performance</p>
+                        <Button size="sm" className="mt-2" variant="outline">
+                            <AlertTriangle className="h-4 w-4 mr-1" />
+                            Monitor
+                        </Button>
+                    </div>
+                </div>
+            </Card>
+
+            <DataManager />
+        </div>
+    );
+};
+
 export default AdminView;
 
-// Structured, table-based manager (country → company type → phase rules)
+// New structured compliance rules manager with hierarchical organization
 const ComplianceRulesManager: React.FC = () => {
+    const [activeSubTab, setActiveSubTab] = useState<'countries' | 'auditors' | 'governance' | 'company-types' | 'compliance-rules'>('countries');
     const [loading, setLoading] = useState(true);
-    const [rows, setRows] = useState<any[]>([]);
-    const [selectedCountry, setSelectedCountry] = useState<string>('');
-    const [companyType, setCompanyType] = useState<string>('default');
-    const [rulesJson, setRulesJson] = useState<any>({});
-    const [newRule, setNewRule] = useState<{ phase: 'firstYear' | 'annual'; name: string; caRequired: boolean; csRequired: boolean }>({ phase: 'annual', name: '', caRequired: false, csRequired: false });
+    
+    // Countries state
+    const [countries, setCountries] = useState<any[]>([]);
+    const [newCountry, setNewCountry] = useState({ code: '', name: '' });
+    
+    // Auditor types state
+    const [auditorTypes, setAuditorTypes] = useState<AuditorType[]>([]);
+    const [newAuditorType, setNewAuditorType] = useState({ name: '', description: '' });
+    
+    // Governance types state
+    const [governanceTypes, setGovernanceTypes] = useState<GovernanceType[]>([]);
+    const [newGovernanceType, setNewGovernanceType] = useState({ name: '', description: '' });
+    
+    // Company types state
+    const [selectedCountryForTypes, setSelectedCountryForTypes] = useState<string>('');
+    const [companyTypes, setCompanyTypes] = useState<CompanyType[]>([]);
+    const [newCompanyType, setNewCompanyType] = useState({ name: '', description: '' });
+    
+    // Compliance rules state
+    const [selectedCountryForRules, setSelectedCountryForRules] = useState<string>('');
+    const [selectedCompanyTypeForRules, setSelectedCompanyTypeForRules] = useState<number | null>(null);
+    const [complianceRules, setComplianceRules] = useState<ComplianceRule[]>([]);
+    const [editingComplianceRule, setEditingComplianceRule] = useState<ComplianceRule | null>(null);
+    const [newComplianceRule, setNewComplianceRule] = useState({
+        name: '',
+        description: '',
+        frequency: 'annual' as 'first-year' | 'monthly' | 'quarterly' | 'annual',
+        validationRequired: 'both' as 'auditor' | 'governance' | 'both'
+    });
 
-    const load = async () => {
+    const loadData = async () => {
         setLoading(true);
-        const data = await complianceRulesService.listAll();
-        setRows(data);
-        if (data.length > 0 && !selectedCountry) {
-            setSelectedCountry(data[0].country_code);
-            setRulesJson(data[0].rules || {});
-            const types = Object.keys(data[0].rules || { default: {} });
-            setCompanyType(types[0] || 'default');
+        try {
+            // Load countries from comprehensive compliance rules
+            const comprehensiveRules = await complianceRulesComprehensiveService.getAllRules();
+            const uniqueCountries = Array.from(new Set(comprehensiveRules.map(rule => ({
+                country_code: rule.country_code,
+                country_name: rule.country_name
+            }))));
+            setCountries(uniqueCountries);
+            
+            // Load auditor types
+            const auditorTypesData = await complianceManagementService.getAuditorTypes();
+            setAuditorTypes(auditorTypesData);
+            
+            // Load governance types
+            const governanceTypesData = await complianceManagementService.getGovernanceTypes();
+            setGovernanceTypes(governanceTypesData);
+            
+            // Load company types
+            const companyTypesData = await complianceManagementService.getCompanyTypes();
+            setCompanyTypes(companyTypesData);
+            
+            // Load compliance rules
+            const complianceRulesData = await complianceManagementService.getComplianceRules();
+            setComplianceRules(complianceRulesData);
+            
+            if (countries.length > 0) {
+                setSelectedCountryForTypes(countries[0].country_code);
+                setSelectedCountryForRules(countries[0].country_code);
+            }
+        } catch (error) {
+            console.error('Error loading data:', error);
         }
         setLoading(false);
     };
 
-    useEffect(() => { load(); }, []);
-
-    useEffect(() => {
-        const row = rows.find(r => r.country_code === selectedCountry);
-        if (row) {
-            setRulesJson(row.rules || {});
-            const types = Object.keys(row.rules || { default: {} });
-            if (!types.includes(companyType)) {
-                setCompanyType(types[0] || 'default');
-            }
-        }
-    }, [selectedCountry]);
-
-    const countryOptions = rows.map(r => r.country_code).sort();
-    const currentCompany = rulesJson[companyType] || { annual: [], firstYear: [] };
-
-    const addRule = () => {
-        if (!newRule.name.trim()) return;
-        const idPrefix = `${selectedCountry.toLowerCase()}-${companyType.toLowerCase().replace(/\s+/g,'')}-${newRule.phase === 'annual' ? 'an' : 'fy'}`;
-        const rule = { id: `${idPrefix}-${Date.now()}`, name: newRule.name.trim(), caRequired: newRule.caRequired, csRequired: newRule.csRequired };
-        const updated = { ...rulesJson };
-        const bucket = (updated[companyType] ||= { annual: [], firstYear: [] });
-        bucket[newRule.phase] = [...(bucket[newRule.phase] || []), rule];
-        setRulesJson(updated);
-        setNewRule({ phase: 'annual', name: '', caRequired: false, csRequired: false });
-    };
-
-    const removeRule = (phase: 'annual' | 'firstYear', id: string) => {
-        const updated = { ...rulesJson };
-        updated[companyType][phase] = updated[companyType][phase].filter((r: any) => r.id !== id);
-        setRulesJson(updated);
-    };
-
-    const updateRuleField = (phase: 'annual' | 'firstYear', id: string, field: 'name' | 'caRequired' | 'csRequired', value: any) => {
-        const updated = { ...rulesJson };
-        updated[companyType][phase] = updated[companyType][phase].map((r: any) => r.id === id ? { ...r, [field]: value } : r);
-        setRulesJson(updated);
-    };
-
-    const saveCountry = async () => {
-        if (!selectedCountry) return;
-        await complianceRulesService.upsertCountryRules(selectedCountry, rulesJson);
-        await load();
-    };
+    useEffect(() => { loadData(); }, []);
 
     const addCountry = async () => {
-        const code = prompt('Enter new country code (e.g., IN, US):');
-        if (!code) return;
-        await complianceRulesService.upsertCountryRules(code.toUpperCase(), { default: { annual: [], firstYear: [] } });
-        await load();
-        setSelectedCountry(code.toUpperCase());
-        setCompanyType('default');
-    };
-
-    const addCompanyType = () => {
-        const type = prompt('Enter company type label (e.g., Private Limited Company):');
-        if (!type) return;
-        if (!rulesJson[type]) {
-            const updated = { ...rulesJson, [type]: { annual: [], firstYear: [] } };
-            setRulesJson(updated);
-            setCompanyType(type);
-        } else {
-            setCompanyType(type);
+        if (!newCountry.code || !newCountry.name) return;
+        try {
+            // Note: Countries are now managed through the comprehensive compliance rules system
+            // This function is kept for backward compatibility but may not be needed
+            console.log('Country management is now handled through the comprehensive compliance rules system');
+            setNewCountry({ code: '', name: '' });
+            await loadData();
+        } catch (error) {
+            console.error('Error adding country:', error);
         }
     };
 
-    const removeCountry = async (country_code: string) => {
-        if (!confirm(`Remove rules for ${country_code}?`)) return;
-        await complianceRulesService.deleteCountry(country_code);
-        await load();
+    const addAuditorType = async () => {
+        if (!newAuditorType.name) return;
+        try {
+            const newType = await complianceManagementService.addAuditorType(
+                newAuditorType.name,
+                newAuditorType.description
+            );
+            setAuditorTypes(prev => [...prev, newType]);
+            setNewAuditorType({ name: '', description: '' });
+        } catch (error) {
+            console.error('Error adding auditor type:', error);
+            alert('Error adding auditor type. Please try again.');
+        }
     };
+
+    const addGovernanceType = async () => {
+        if (!newGovernanceType.name) return;
+        try {
+            const newType = await complianceManagementService.addGovernanceType(
+                newGovernanceType.name,
+                newGovernanceType.description
+            );
+            setGovernanceTypes(prev => [...prev, newType]);
+            setNewGovernanceType({ name: '', description: '' });
+        } catch (error) {
+            console.error('Error adding governance type:', error);
+            alert('Error adding governance type. Please try again.');
+        }
+    };
+
+    const addCompanyType = async () => {
+        if (!newCompanyType.name || !selectedCountryForTypes) return;
+        try {
+            const newType = await complianceManagementService.addCompanyType(
+                newCompanyType.name,
+                newCompanyType.description,
+                selectedCountryForTypes
+            );
+            setCompanyTypes(prev => [...prev, newType]);
+            setNewCompanyType({ name: '', description: '' });
+        } catch (error) {
+            console.error('Error adding company type:', error);
+            alert('Error adding company type. Please try again.');
+        }
+    };
+
+    const addComplianceRule = async () => {
+        if (!newComplianceRule.name || !selectedCountryForRules || !selectedCompanyTypeForRules) return;
+        try {
+            const newRule = await complianceManagementService.addComplianceRule(
+                newComplianceRule.name,
+                newComplianceRule.description,
+                newComplianceRule.frequency,
+                newComplianceRule.validationRequired,
+                selectedCountryForRules,
+                selectedCompanyTypeForRules
+            );
+            setComplianceRules(prev => [...prev, newRule]);
+            setNewComplianceRule({
+                name: '',
+                description: '',
+                frequency: 'annual',
+                validationRequired: 'both'
+            });
+        } catch (error) {
+            console.error('Error adding compliance rule:', error);
+            alert('Error adding compliance rule. Please try again.');
+        }
+    };
+
+    const editComplianceRule = (rule: ComplianceRule) => {
+        setEditingComplianceRule(rule);
+        setNewComplianceRule({
+            name: rule.name,
+            description: rule.description,
+            frequency: rule.frequency,
+            validationRequired: rule.validation_required
+        });
+    };
+
+    const updateComplianceRule = async () => {
+        if (!editingComplianceRule || !newComplianceRule.name) return;
+        try {
+            const updatedRule = await complianceManagementService.updateComplianceRule(
+                editingComplianceRule.id,
+                newComplianceRule.name,
+                newComplianceRule.description,
+                newComplianceRule.frequency,
+                newComplianceRule.validationRequired
+            );
+            setComplianceRules(prev => prev.map(rule => 
+                rule.id === editingComplianceRule.id ? updatedRule : rule
+            ));
+            setEditingComplianceRule(null);
+            setNewComplianceRule({
+                name: '',
+                description: '',
+                frequency: 'annual',
+                validationRequired: 'both'
+            });
+        } catch (error) {
+            console.error('Error updating compliance rule:', error);
+            alert('Error updating compliance rule. Please try again.');
+        }
+    };
+
+    const cancelEdit = () => {
+        setEditingComplianceRule(null);
+        setNewComplianceRule({
+            name: '',
+            description: '',
+            frequency: 'annual',
+            validationRequired: 'both'
+        });
+    };
+
+    const renderCountriesTab = () => (
+        <div className="space-y-6">
+            <div className="flex items-center justify-between">
+                <h4 className="text-lg font-semibold text-slate-700">Countries Management</h4>
+                <Button onClick={addCountry}>Add Country</Button>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Country Code</label>
+                    <input
+                        value={newCountry.code}
+                        onChange={(e) => setNewCountry(prev => ({ ...prev, code: e.target.value }))}
+                        className="w-full border border-slate-300 rounded-md px-3 py-2"
+                        placeholder="e.g., US, IN, UK"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Country Name</label>
+                    <input
+                        value={newCountry.name}
+                        onChange={(e) => setNewCountry(prev => ({ ...prev, name: e.target.value }))}
+                        className="w-full border border-slate-300 rounded-md px-3 py-2"
+                        placeholder="e.g., United States, India, United Kingdom"
+                    />
+                    </div>
+                </div>
+
+            <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-200">
+                    <thead className="bg-slate-50">
+                        <tr>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Country Code</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Country Name</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 bg-white">
+                        {countries.map((country) => (
+                            <tr key={country.country_code}>
+                                <td className="px-4 py-2 text-sm text-slate-900">{country.country_code}</td>
+                                <td className="px-4 py-2 text-sm text-slate-900">{country.country_code}</td>
+                                <td className="px-4 py-2 text-sm">
+                                    <Button size="sm" className="bg-red-600 hover:bg-red-700" onClick={() => {
+                                        if (confirm('Delete this country?')) {
+                                            // Note: Country deletion is now handled through the comprehensive compliance rules system
+                                            console.log('Country deletion is now handled through the comprehensive compliance rules system');
+                                            loadData();
+                                        }
+                                    }}>Delete</Button>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+
+    const renderAuditorTypesTab = () => (
+        <div className="space-y-6">
+            <div className="flex items-center justify-between">
+                <h4 className="text-lg font-semibold text-slate-700">Auditor Types Management</h4>
+                <Button onClick={addAuditorType}>Add Auditor Type</Button>
+                        </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Auditor Type Name</label>
+                    <input
+                        value={newAuditorType.name}
+                        onChange={(e) => setNewAuditorType(prev => ({ ...prev, name: e.target.value }))}
+                        className="w-full border border-slate-300 rounded-md px-3 py-2"
+                        placeholder="e.g., CA, CFA, Auditor"
+                    />
+                </div>
+                        <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Description</label>
+                    <input
+                        value={newAuditorType.description}
+                        onChange={(e) => setNewAuditorType(prev => ({ ...prev, description: e.target.value }))}
+                        className="w-full border border-slate-300 rounded-md px-3 py-2"
+                        placeholder="e.g., Chartered Accountant"
+                    />
+                    </div>
+                </div>
+
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-slate-200">
+                                    <thead className="bg-slate-50">
+                                        <tr>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Name</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Description</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-200 bg-white">
+                        {auditorTypes.map((type) => (
+                            <tr key={type.id}>
+                                <td className="px-4 py-2 text-sm text-slate-900">{type.name}</td>
+                                <td className="px-4 py-2 text-sm text-slate-900">{type.description}</td>
+                                <td className="px-4 py-2 text-sm">
+                                    <Button size="sm" className="bg-red-600 hover:bg-red-700" onClick={async () => {
+                                        if (confirm('Delete this auditor type?')) {
+                                            try {
+                                                await complianceManagementService.deleteAuditorType(type.id);
+                                                setAuditorTypes(prev => prev.filter(t => t.id !== type.id));
+                                            } catch (error) {
+                                                console.error('Error deleting auditor type:', error);
+                                                alert('Error deleting auditor type. Please try again.');
+                                            }
+                                        }
+                                    }}>Delete</Button>
+                                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+                        </div>
+        </div>
+    );
+
+    const renderGovernanceTypesTab = () => (
+        <div className="space-y-6">
+            <div className="flex items-center justify-between">
+                <h4 className="text-lg font-semibold text-slate-700">Governance Types Management</h4>
+                <Button onClick={addGovernanceType}>Add Governance Type</Button>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Governance Type Name</label>
+                    <input
+                        value={newGovernanceType.name}
+                        onChange={(e) => setNewGovernanceType(prev => ({ ...prev, name: e.target.value }))}
+                        className="w-full border border-slate-300 rounded-md px-3 py-2"
+                        placeholder="e.g., CS, Director, Legal"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Description</label>
+                    <input
+                        value={newGovernanceType.description}
+                        onChange={(e) => setNewGovernanceType(prev => ({ ...prev, description: e.target.value }))}
+                        className="w-full border border-slate-300 rounded-md px-3 py-2"
+                        placeholder="e.g., Company Secretary"
+                    />
+                </div>
+            </div>
+
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-slate-200">
+                                    <thead className="bg-slate-50">
+                                        <tr>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Name</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Description</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-200 bg-white">
+                        {governanceTypes.map((type) => (
+                            <tr key={type.id}>
+                                <td className="px-4 py-2 text-sm text-slate-900">{type.name}</td>
+                                <td className="px-4 py-2 text-sm text-slate-900">{type.description}</td>
+                                <td className="px-4 py-2 text-sm">
+                                    <Button size="sm" className="bg-red-600 hover:bg-red-700" onClick={async () => {
+                                        if (confirm('Delete this governance type?')) {
+                                            try {
+                                                await complianceManagementService.deleteGovernanceType(type.id);
+                                                setGovernanceTypes(prev => prev.filter(t => t.id !== type.id));
+                                            } catch (error) {
+                                                console.error('Error deleting governance type:', error);
+                                                alert('Error deleting governance type. Please try again.');
+                                            }
+                                        }
+                                    }}>Delete</Button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+    );
+
+    const renderCompanyTypesTab = () => (
+        <div className="space-y-6">
+            <div className="flex items-center justify-between">
+                <h4 className="text-lg font-semibold text-slate-700">Company Types Management</h4>
+                <Button onClick={addCompanyType}>Add Company Type</Button>
+            </div>
+            
+            <div className="flex items-center gap-4 mb-4">
+                        <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Select Country</label>
+                    <select
+                        value={selectedCountryForTypes}
+                        onChange={(e) => setSelectedCountryForTypes(e.target.value)}
+                        className="border border-slate-300 rounded-md px-3 py-2"
+                    >
+                        {countries.map(country => (
+                            <option key={country.country_code} value={country.country_code}>{country.country_code}</option>
+                        ))}
+                    </select>
+                            </div>
+                        </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Company Type Name</label>
+                    <input
+                        value={newCompanyType.name}
+                        onChange={(e) => setNewCompanyType(prev => ({ ...prev, name: e.target.value }))}
+                        className="w-full border border-slate-300 rounded-md px-3 py-2"
+                        placeholder="e.g., Private Limited Company"
+                    />
+                </div>
+                        <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Description</label>
+                    <input
+                        value={newCompanyType.description}
+                        onChange={(e) => setNewCompanyType(prev => ({ ...prev, description: e.target.value }))}
+                        className="w-full border border-slate-300 rounded-md px-3 py-2"
+                        placeholder="e.g., Private Limited Company under Companies Act"
+                    />
+                </div>
+            </div>
+
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-slate-200">
+                                    <thead className="bg-slate-50">
+                                        <tr>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Name</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Description</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Country</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-200 bg-white">
+                        {companyTypes.filter(ct => ct.country_code === selectedCountryForTypes).map((type) => (
+                            <tr key={type.id}>
+                                <td className="px-4 py-2 text-sm text-slate-900">{type.name}</td>
+                                <td className="px-4 py-2 text-sm text-slate-900">{type.description}</td>
+                                <td className="px-4 py-2 text-sm text-slate-900">{type.country_code}</td>
+                                <td className="px-4 py-2 text-sm">
+                                    <Button size="sm" className="bg-red-600 hover:bg-red-700" onClick={async () => {
+                                        if (confirm('Delete this company type?')) {
+                                            try {
+                                                await complianceManagementService.deleteCompanyType(type.id);
+                                                setCompanyTypes(prev => prev.filter(t => t.id !== type.id));
+                                            } catch (error) {
+                                                console.error('Error deleting company type:', error);
+                                                alert('Error deleting company type. Please try again.');
+                                            }
+                                        }
+                                    }}>Delete</Button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+    );
+
+    const renderComplianceRulesTab = () => (
+        <div className="space-y-6">
+            <div className="flex items-center justify-between">
+                <h4 className="text-lg font-semibold text-slate-700">Compliance Rules Management</h4>
+                <div className="flex gap-2">
+                    {editingComplianceRule ? (
+                        <>
+                            <Button onClick={updateComplianceRule} className="bg-green-600 hover:bg-green-700">
+                                Update Rule
+                            </Button>
+                            <Button onClick={cancelEdit} className="bg-gray-600 hover:bg-gray-700">
+                                Cancel
+                            </Button>
+                        </>
+                    ) : (
+                        <Button onClick={addComplianceRule}>Add Compliance Rule</Button>
+                    )}
+                </div>
+            </div>
+            
+            <div className="flex items-center gap-4 mb-4">
+                            <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Select Country</label>
+                    <select
+                        value={selectedCountryForRules}
+                        onChange={(e) => setSelectedCountryForRules(e.target.value)}
+                        className="border border-slate-300 rounded-md px-3 py-2"
+                    >
+                        {countries.map(country => (
+                            <option key={country.country_code} value={country.country_code}>{country.country_code}</option>
+                        ))}
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Select Company Type</label>
+                    <select
+                        value={selectedCompanyTypeForRules}
+                        onChange={(e) => setSelectedCompanyTypeForRules(e.target.value ? parseInt(e.target.value) : null)}
+                        className="border border-slate-300 rounded-md px-3 py-2"
+                    >
+                        <option value="">Select Company Type</option>
+                        {companyTypes.filter(ct => ct.country_code === selectedCountryForRules).map(type => (
+                            <option key={type.id} value={type.id}>{type.name}</option>
+                        ))}
+                    </select>
+                            </div>
+                        </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Rule Name</label>
+                    <input
+                        value={newComplianceRule.name}
+                        onChange={(e) => setNewComplianceRule(prev => ({ ...prev, name: e.target.value }))}
+                        className="w-full border border-slate-300 rounded-md px-3 py-2"
+                        placeholder="e.g., File Annual Return (MGT-7)"
+                    />
+                </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Description</label>
+                    <input
+                        value={newComplianceRule.description}
+                        onChange={(e) => setNewComplianceRule(prev => ({ ...prev, description: e.target.value }))}
+                        className="w-full border border-slate-300 rounded-md px-3 py-2"
+                        placeholder="e.g., Annual return filing requirement"
+                    />
+                </div>
+                            <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Frequency</label>
+                    <select
+                        value={newComplianceRule.frequency}
+                        onChange={(e) => setNewComplianceRule(prev => ({ ...prev, frequency: e.target.value as any }))}
+                        className="w-full border border-slate-300 rounded-md px-3 py-2"
+                    >
+                        <option value="first-year">First Year</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="quarterly">Quarterly</option>
+                                    <option value="annual">Annual</option>
+                                </select>
+                            </div>
+                <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">Validation Required</label>
+                    <select
+                        value={newComplianceRule.validationRequired}
+                        onChange={(e) => setNewComplianceRule(prev => ({ ...prev, validationRequired: e.target.value as any }))}
+                        className="w-full border border-slate-300 rounded-md px-3 py-2"
+                    >
+                        <option value="auditor">Auditor or Equivalent</option>
+                        <option value="governance">Governance or Equivalent</option>
+                        <option value="both">Both</option>
+                                </select>
+                            </div>
+                        </div>
+
+            <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-200">
+                    <thead className="bg-slate-50">
+                        <tr>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Rule Name</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Description</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Frequency</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Validation</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Country</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Company Type</th>
+                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 bg-white">
+                        {complianceRules.filter(cr => cr.country_code === selectedCountryForRules && cr.company_type_id === selectedCompanyTypeForRules).map((rule) => (
+                            <tr key={rule.id}>
+                                <td className="px-4 py-2 text-sm text-slate-900">{rule.name}</td>
+                                <td className="px-4 py-2 text-sm text-slate-900">{rule.description}</td>
+                                <td className="px-4 py-2 text-sm text-slate-900">{rule.frequency}</td>
+                                <td className="px-4 py-2 text-sm text-slate-900">{rule.validation_required}</td>
+                                <td className="px-4 py-2 text-sm text-slate-900">{rule.country_code}</td>
+                                <td className="px-4 py-2 text-sm text-slate-900">{companyTypes.find(ct => ct.id === rule.company_type_id)?.name || 'Unknown'}</td>
+                                <td className="px-4 py-2 text-sm">
+                                    <div className="flex gap-2">
+                                        <Button 
+                                            size="sm" 
+                                            className="bg-blue-600 hover:bg-blue-700" 
+                                            onClick={() => editComplianceRule(rule)}
+                                        >
+                                            Edit
+                                        </Button>
+                                        <Button 
+                                            size="sm" 
+                                            className="bg-red-600 hover:bg-red-700" 
+                                            onClick={async () => {
+                                                if (confirm('Delete this compliance rule?')) {
+                                                    try {
+                                                        await complianceManagementService.deleteComplianceRule(rule.id);
+                                                        setComplianceRules(prev => prev.filter(r => r.id !== rule.id));
+                                                    } catch (error) {
+                                                        console.error('Error deleting compliance rule:', error);
+                                                        alert('Error deleting compliance rule. Please try again.');
+                                                    }
+                                                }
+                                            }}
+                                        >
+                                            Delete
+                                        </Button>
+                                    </div>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
 
     return (
         <Card>
             <div className="p-4 space-y-6">
-                <div className="flex flex-wrap gap-3 items-center justify-between">
-                    <h3 className="text-lg font-semibold text-slate-700">Compliance Rules (Global)</h3>
-                    <div className="flex gap-2">
-                        <Button variant="outline" onClick={addCountry}>Add Country</Button>
-                        {selectedCountry && <Button className="bg-red-600 hover:bg-red-700" variant="default" onClick={() => removeCountry(selectedCountry)}>Delete Country</Button>}
-                        <Button onClick={saveCountry}>Save Changes</Button>
-                    </div>
-                </div>
+                <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold text-slate-700">Compliance Rules Management</h3>
+                            </div>
+
+                {/* Sub-tabs */}
+                <div className="border-b border-slate-200">
+                    <nav className="-mb-px flex space-x-6">
+                        <button
+                            onClick={() => setActiveSubTab('countries')}
+                            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                                activeSubTab === 'countries'
+                                    ? 'border-blue-500 text-blue-600'
+                                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                            }`}
+                        >
+                            Countries
+                        </button>
+                        <button
+                            onClick={() => setActiveSubTab('auditors')}
+                            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                                activeSubTab === 'auditors'
+                                    ? 'border-blue-500 text-blue-600'
+                                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                            }`}
+                        >
+                            Auditor Types
+                        </button>
+                        <button
+                            onClick={() => setActiveSubTab('governance')}
+                            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                                activeSubTab === 'governance'
+                                    ? 'border-blue-500 text-blue-600'
+                                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                            }`}
+                        >
+                            Governance Types
+                        </button>
+                        <button
+                            onClick={() => setActiveSubTab('company-types')}
+                            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                                activeSubTab === 'company-types'
+                                    ? 'border-blue-500 text-blue-600'
+                                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                            }`}
+                        >
+                            Company Types
+                        </button>
+                        <button
+                            onClick={() => setActiveSubTab('compliance-rules')}
+                            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                                activeSubTab === 'compliance-rules'
+                                    ? 'border-blue-500 text-blue-600'
+                                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                            }`}
+                        >
+                            Compliance Rules
+                        </button>
+                    </nav>
+                        </div>
 
                 {loading ? (
                     <div className="text-slate-500">Loading...</div>
                 ) : (
-                    <div className="grid gap-4">
-                        <div className="flex flex-wrap gap-3 items-center">
-                            <label className="text-sm text-slate-600">Country</label>
-                            <select value={selectedCountry} onChange={(e) => setSelectedCountry(e.target.value)} className="border border-slate-300 rounded-md px-3 py-1 text-sm">
-                                {countryOptions.map(c => <option key={c} value={c}>{c}</option>)}
-                            </select>
-                            <label className="text-sm text-slate-600 ml-2">Company Type</label>
-                            <select value={companyType} onChange={(e) => setCompanyType(e.target.value)} className="border border-slate-300 rounded-md px-3 py-1 text-sm">
-                                {Object.keys(rulesJson || {}).map((t: string) => (
-                                    <option key={t} value={t}>{t}</option>
-                                ))}
-                            </select>
-                            <Button variant="outline" onClick={addCompanyType}>Add Company Type</Button>
-                        </div>
-
-                        {/* First Year Rules Table */}
-                        <div>
-                            <h4 className="text-sm font-semibold text-slate-700 mb-2">First Year Rules</h4>
-                            <div className="overflow-x-auto">
-                                <table className="min-w-full divide-y divide-slate-200">
-                                    <thead className="bg-slate-50">
-                                        <tr>
-                                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Rule Name</th>
-                                            <th className="px-4 py-2 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">CA Required</th>
-                                            <th className="px-4 py-2 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">CS Required</th>
-                                            <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-200 bg-white">
-                                        {(currentCompany.firstYear || []).map((r: any) => (
-                                            <tr key={r.id}>
-                                                <td className="px-4 py-2">
-                                                    <input value={r.name} onChange={(e) => updateRuleField('firstYear', r.id, 'name', e.target.value)} className="w-full border border-slate-300 rounded-md px-2 py-1 text-sm" />
-                                                </td>
-                                                <td className="px-4 py-2 text-center">
-                                                    <input type="checkbox" checked={!!r.caRequired} onChange={(e) => updateRuleField('firstYear', r.id, 'caRequired', e.target.checked)} />
-                                                </td>
-                                                <td className="px-4 py-2 text-center">
-                                                    <input type="checkbox" checked={!!r.csRequired} onChange={(e) => updateRuleField('firstYear', r.id, 'csRequired', e.target.checked)} />
-                                                </td>
-                                                <td className="px-4 py-2 text-right">
-                                                    <Button size="sm" className="bg-red-600 hover:bg-red-700" onClick={() => removeRule('firstYear', r.id)}>Remove</Button>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        {/* Annual Rules Table */}
-                        <div>
-                            <h4 className="text-sm font-semibold text-slate-700 mb-2">Annual Rules</h4>
-                            <div className="overflow-x-auto">
-                                <table className="min-w-full divide-y divide-slate-200">
-                                    <thead className="bg-slate-50">
-                                        <tr>
-                                            <th className="px-4 py-2 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Rule Name</th>
-                                            <th className="px-4 py-2 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">CA Required</th>
-                                            <th className="px-4 py-2 text-center text-xs font-semibold text-slate-600 uppercase tracking-wider">CS Required</th>
-                                            <th className="px-4 py-2 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-200 bg-white">
-                                        {(currentCompany.annual || []).map((r: any) => (
-                                            <tr key={r.id}>
-                                                <td className="px-4 py-2">
-                                                    <input value={r.name} onChange={(e) => updateRuleField('annual', r.id, 'name', e.target.value)} className="w-full border border-slate-300 rounded-md px-2 py-1 text-sm" />
-                                                </td>
-                                                <td className="px-4 py-2 text-center">
-                                                    <input type="checkbox" checked={!!r.caRequired} onChange={(e) => updateRuleField('annual', r.id, 'caRequired', e.target.checked)} />
-                                                </td>
-                                                <td className="px-4 py-2 text-center">
-                                                    <input type="checkbox" checked={!!r.csRequired} onChange={(e) => updateRuleField('annual', r.id, 'csRequired', e.target.checked)} />
-                                                </td>
-                                                <td className="px-4 py-2 text-right">
-                                                    <Button size="sm" className="bg-red-600 hover:bg-red-700" onClick={() => removeRule('annual', r.id)}>Remove</Button>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        {/* Add Rule */}
-                        <div className="flex flex-wrap items-end gap-2">
-                            <div>
-                                <label className="block text-xs text-slate-600 mb-1">Phase</label>
-                                <select value={newRule.phase} onChange={(e) => setNewRule(prev => ({ ...prev, phase: e.target.value as any }))} className="border border-slate-300 rounded-md px-2 py-1 text-sm">
-                                    <option value="annual">Annual</option>
-                                    <option value="firstYear">First Year</option>
-                                </select>
-                            </div>
-                            <div className="flex-1 min-w-[240px]">
-                                <label className="block text-xs text-slate-600 mb-1">Rule Name</label>
-                                <input value={newRule.name} onChange={(e) => setNewRule(prev => ({ ...prev, name: e.target.value }))} className="w-full border border-slate-300 rounded-md px-2 py-1 text-sm" placeholder="e.g., File Annual Return (MGT-7)" />
-                            </div>
-                            <label className="flex items-center gap-2 text-sm text-slate-700">
-                                <input type="checkbox" checked={newRule.caRequired} onChange={(e) => setNewRule(prev => ({ ...prev, caRequired: e.target.checked }))} /> CA Required
-                            </label>
-                            <label className="flex items-center gap-2 text-sm text-slate-700">
-                                <input type="checkbox" checked={newRule.csRequired} onChange={(e) => setNewRule(prev => ({ ...prev, csRequired: e.target.checked }))} /> CS Required
-                            </label>
-                            <Button onClick={addRule}>Add Rule</Button>
-                        </div>
+                    <div>
+                        {activeSubTab === 'countries' && renderCountriesTab()}
+                        {activeSubTab === 'auditors' && renderAuditorTypesTab()}
+                        {activeSubTab === 'governance' && renderGovernanceTypesTab()}
+                        {activeSubTab === 'company-types' && renderCompanyTypesTab()}
+                        {activeSubTab === 'compliance-rules' && renderComplianceRulesTab()}
                     </div>
                 )}
             </div>

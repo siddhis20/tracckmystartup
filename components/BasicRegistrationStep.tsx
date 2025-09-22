@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Card from './ui/Card';
 import Button from './ui/Button';
 import Input from './ui/Input';
 import { UserRole } from '../types';
-import { Mail, CheckCircle } from 'lucide-react';
+import { Mail, CheckCircle, AlertCircle, XCircle } from 'lucide-react';
 import LogoTMS from './public/logoTMS.svg';
 import { authService } from '../lib/auth';
 
@@ -14,7 +14,7 @@ interface BasicRegistrationStepProps {
     password: string;
     role: UserRole;
     startupName?: string;
-    country: string;
+    investmentAdvisorCode?: string;
   }) => void;
   onNavigateToLogin: () => void;
   onNavigateToLanding?: () => void;
@@ -30,24 +30,107 @@ export const BasicRegistrationStep: React.FC<BasicRegistrationStepProps> = ({
     email: '',
     password: '',
     confirmPassword: '',
-    country: 'India',
     role: 'Investor' as UserRole,
-    startupName: ''
+    startupName: '',
+    investmentAdvisorCode: ''
   });
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
+  
+  // Role selection state
+  const [availableRoles, setAvailableRoles] = useState<string[]>(['Investor', 'Startup', 'Startup Facilitation Center', 'Investment Advisor', 'Admin']);
+  
+  // New state for email validation
+  const [emailValidation, setEmailValidation] = useState<{
+    isValidating: boolean;
+    exists: boolean;
+    error: string | null;
+    lastChecked: string | null;
+  }>({
+    isValidating: false,
+    exists: false,
+    error: null,
+    lastChecked: null
+  });
+
+
+
+  // Debounced email validation
+  const debouncedEmailCheck = useCallback(
+    (() => {
+      let timeoutId: NodeJS.Timeout;
+      return (email: string) => {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(async () => {
+          if (email && email.includes('@')) {
+            setEmailValidation(prev => ({ ...prev, isValidating: true }));
+            try {
+              const result = await authService.checkEmailExists(email);
+              setEmailValidation({
+                isValidating: false,
+                exists: result.exists,
+                error: result.error || null,
+                lastChecked: email
+              });
+            } catch (error) {
+              setEmailValidation({
+                isValidating: false,
+                exists: false,
+                error: 'Unable to check email availability',
+                lastChecked: email
+              });
+            }
+          } else {
+            setEmailValidation({
+              isValidating: false,
+              exists: false,
+              error: null,
+              lastChecked: null
+            });
+          }
+        }, 500); // 500ms delay
+      };
+    })(),
+    []
+  );
+
+  // Check email when email field changes
+  useEffect(() => {
+    if (formData.email) {
+      debouncedEmailCheck(formData.email);
+    } else {
+      setEmailValidation({
+        isValidating: false,
+        exists: false,
+        error: null,
+        lastChecked: null
+      });
+    }
+  }, [formData.email, debouncedEmailCheck]);
 
   const handleInputChange = (field: string, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
+    
+    // Clear email validation error when user starts typing again
+    if (field === 'email') {
+      setEmailValidation(prev => ({ ...prev, error: null }));
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
+
+    // Check if email already exists before proceeding
+    if (emailValidation.exists) {
+      setError('This email is already registered. Please sign in instead.');
+      setIsLoading(false);
+      return;
+    }
 
     // Validation
     if (formData.password !== formData.confirmPassword) {
@@ -62,6 +145,13 @@ export const BasicRegistrationStep: React.FC<BasicRegistrationStepProps> = ({
       return;
     }
 
+    // Additional email validation
+    if (!formData.email || !formData.email.includes('@')) {
+      setError('Please enter a valid email address');
+      setIsLoading(false);
+      return;
+    }
+
     try {
       // Create user account with email verification required
       const { user, error: signUpError, confirmationRequired } = await authService.signUp({
@@ -70,6 +160,7 @@ export const BasicRegistrationStep: React.FC<BasicRegistrationStepProps> = ({
         name: formData.name,
         role: formData.role,
         startupName: formData.role === 'Startup' ? formData.startupName : undefined,
+        investmentAdvisorCode: formData.investmentAdvisorCode || undefined,
         founders: [],
         fileUrls: {}
       });
@@ -94,7 +185,7 @@ export const BasicRegistrationStep: React.FC<BasicRegistrationStepProps> = ({
           password: formData.password,
           role: formData.role,
           startupName: formData.role === 'Startup' ? formData.startupName : undefined,
-          country: formData.country
+          investmentAdvisorCode: formData.investmentAdvisorCode || undefined
         });
       }
 
@@ -170,21 +261,26 @@ export const BasicRegistrationStep: React.FC<BasicRegistrationStepProps> = ({
   }
 
   return (
-    <>
+    <div className="w-full flex flex-col items-center">
       {onNavigateToLanding && (
-        <div className="w-full max-w-2xl mx-auto mb-4">
+        <div className="w-full max-w-2xl mb-4 flex justify-start">
           <button
             onClick={onNavigateToLanding}
             className="text-sm text-slate-500 hover:text-slate-700 underline"
-            aria-label="Back to Landing"
+            aria-label="Back"
           >
-            ← Back to Landing
+            ← Back
           </button>
         </div>
       )}
     <Card className="w-full max-w-2xl">
       <div className="text-center mb-8">
-        <img src={LogoTMS} alt="TrackMyStartup" className="mx-auto h-40 w-40" />
+        <img 
+          src={LogoTMS} 
+          alt="TrackMyStartup" 
+          className="mx-auto h-40 w-40 cursor-pointer hover:opacity-80 transition-opacity" 
+          onClick={onNavigateToLanding}
+        />
         <h2 className="mt-4 text-3xl font-bold tracking-tight text-slate-900">Create a new account</h2>
         <p className="mt-2 text-sm text-slate-600">
           Or{' '}
@@ -195,16 +291,7 @@ export const BasicRegistrationStep: React.FC<BasicRegistrationStepProps> = ({
             sign in to your existing account
           </button>
         </p>
-        {onNavigateToLanding && (
-          <p className="mt-2 text-xs text-slate-500">
-            <button
-              onClick={onNavigateToLanding}
-              className="underline hover:text-slate-700"
-            >
-              ← Back to Landing
-            </button>
-          </p>
-        )}
+
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
@@ -220,15 +307,51 @@ export const BasicRegistrationStep: React.FC<BasicRegistrationStepProps> = ({
             onChange={(e) => handleInputChange('name', e.target.value)}
           />
           
-          <Input
-            label="Email address"
-            id="email"
-            name="email"
-            type="email"
-            required
-            value={formData.email}
-            onChange={(e) => handleInputChange('email', e.target.value)}
-          />
+          <div>
+            <Input
+              label="Email address"
+              id="email"
+              name="email"
+              type="email"
+              required
+              value={formData.email}
+              onChange={(e) => handleInputChange('email', e.target.value)}
+              className={emailValidation.exists ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : 'border-slate-300'}
+            />
+            
+            {/* Email validation feedback */}
+            {formData.email && (
+              <div className="mt-1">
+                {emailValidation.isValidating && (
+                  <div className="flex items-center text-sm text-slate-500">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-slate-500 mr-2"></div>
+                    Checking email availability...
+                  </div>
+                )}
+                
+                {!emailValidation.isValidating && emailValidation.exists && (
+                  <div className="flex items-center text-sm text-red-600">
+                    <XCircle className="h-4 w-4 mr-1" />
+                    This email is already registered. Please sign in instead.
+                  </div>
+                )}
+                
+                {!emailValidation.isValidating && !emailValidation.exists && emailValidation.lastChecked === formData.email && (
+                  <div className="flex items-center text-sm text-green-600">
+                    <CheckCircle className="h-4 w-4 mr-1" />
+                    Email is available
+                  </div>
+                )}
+                
+                {emailValidation.error && (
+                  <div className="flex items-center text-sm text-amber-600">
+                    <AlertCircle className="h-4 w-4 mr-1" />
+                    {emailValidation.error}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -255,28 +378,8 @@ export const BasicRegistrationStep: React.FC<BasicRegistrationStepProps> = ({
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
-            <label htmlFor="country" className="block text-sm font-medium text-slate-700 mb-2">
-              Country
-            </label>
-            <select
-              id="country"
-              name="country"
-              required
-              value={formData.country}
-              onChange={(e) => handleInputChange('country', e.target.value)}
-              className="block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-brand-primary focus:border-brand-primary"
-            >
-              <option value="India">India</option>
-              <option value="USA">USA</option>
-              <option value="UK">UK</option>
-              <option value="Canada">Canada</option>
-              <option value="Australia">Australia</option>
-            </select>
-          </div>
-
-          <div>
             <label htmlFor="role" className="block text-sm font-medium text-slate-700 mb-2">
-              Role
+              Role *
             </label>
             <select
               id="role"
@@ -286,14 +389,32 @@ export const BasicRegistrationStep: React.FC<BasicRegistrationStepProps> = ({
               onChange={(e) => handleInputChange('role', e.target.value as UserRole)}
               className="block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-brand-primary focus:border-brand-primary"
             >
-              <option value="Investor">Investor</option>
-              <option value="Startup">Startup</option>
-              <option value="CA">CA</option>
-              <option value="CS">CS</option>
-              <option value="Startup Facilitation Center">Startup Facilitation Center</option>
+              <option value="">Select Role</option>
+              {availableRoles.map(role => (
+                <option key={role} value={role}>
+                  {role === 'CA' ? `${role} (Chartered Accountant)` :
+                   role === 'CS' ? `${role} (Company Secretary)` :
+                   role}
+                </option>
+              ))}
             </select>
           </div>
         </div>
+
+
+        {/* Investment Advisor Code - Only show for Investor and Startup roles */}
+        {(formData.role === 'Investor' || formData.role === 'Startup') && (
+          <Input
+            label="Investment Advisor Code (Optional)"
+            id="investmentAdvisorCode"
+            name="investmentAdvisorCode"
+            type="text"
+            placeholder="IA-XXXXXX"
+            value={formData.investmentAdvisorCode}
+            onChange={(e) => handleInputChange('investmentAdvisorCode', e.target.value)}
+            helpText="Enter your Investment Advisor's code if you have one"
+          />
+        )}
 
         {/* Startup Name - Only show if role is Startup */}
         {formData.role === 'Startup' && (
@@ -322,12 +443,12 @@ export const BasicRegistrationStep: React.FC<BasicRegistrationStepProps> = ({
         <Button
           type="submit"
           className="w-full"
-          disabled={isLoading}
+          disabled={isLoading || emailValidation.exists}
         >
           {isLoading ? 'Creating Account...' : 'Create Account'}
         </Button>
       </form>
-    </Card>
-    </>
-  );
+        </Card>
+    </div>
+   );
 };

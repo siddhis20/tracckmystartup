@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { Employee } from '../types';
+import { validateJoiningDate } from './dateValidation';
 
 export interface EmployeeFilters {
   entity?: string;
@@ -70,6 +71,30 @@ class EmployeesService {
   }
 
   async addEmployee(startupId: number, employeeData: Omit<Employee, 'id'>): Promise<Employee> {
+    // Validate joining date (no future dates allowed)
+    const dateValidation = validateJoiningDate(employeeData.joiningDate);
+    if (!dateValidation.isValid) {
+      throw new Error(dateValidation.error);
+    }
+
+    // Validation: Check if employee joining date is before company registration date
+    const { data: startupData, error: startupError } = await supabase
+      .from('startups')
+      .select('registration_date')
+      .eq('id', startupId)
+      .single();
+
+    if (startupError) throw startupError;
+
+    if (startupData?.registration_date && employeeData.joiningDate) {
+      const joiningDate = new Date(employeeData.joiningDate);
+      const registrationDate = new Date(startupData.registration_date);
+      
+      if (joiningDate < registrationDate) {
+        throw new Error(`Employee joining date cannot be before the company registration date (${startupData.registration_date}). Please select a date on or after the registration date.`);
+      }
+    }
+
     const { data, error } = await supabase
       .from('employees')
       .insert({
@@ -104,6 +129,42 @@ class EmployeesService {
   }
 
   async updateEmployee(id: string, employeeData: Partial<Employee>): Promise<Employee> {
+    // If joining date is being updated, validate it
+    if (employeeData.joiningDate !== undefined) {
+      // Validate joining date (no future dates allowed)
+      const dateValidation = validateJoiningDate(employeeData.joiningDate);
+      if (!dateValidation.isValid) {
+        throw new Error(dateValidation.error);
+      }
+
+      // First get the startup_id for this employee
+      const { data: employeeRecord, error: employeeError } = await supabase
+        .from('employees')
+        .select('startup_id')
+        .eq('id', id)
+        .single();
+
+      if (employeeError) throw employeeError;
+
+      // Get the startup's registration date
+      const { data: startupData, error: startupError } = await supabase
+        .from('startups')
+        .select('registration_date')
+        .eq('id', employeeRecord.startup_id)
+        .single();
+
+      if (startupError) throw startupError;
+
+      if (startupData?.registration_date) {
+        const joiningDate = new Date(employeeData.joiningDate);
+        const registrationDate = new Date(startupData.registration_date);
+        
+        if (joiningDate < registrationDate) {
+          throw new Error(`Employee joining date cannot be before the company registration date (${startupData.registration_date}). Please select a date on or after the registration date.`);
+        }
+      }
+    }
+
     const updateData: any = {};
     
     if (employeeData.name !== undefined) updateData.name = employeeData.name;
@@ -154,7 +215,7 @@ class EmployeesService {
 
   async getEmployeeSummary(startupId: number): Promise<EmployeeSummary> {
     try {
-      const { data, error } = await supabase.rpc('get_employee_summary', { startup_id_param: startupId });
+      const { data, error } = await supabase.rpc('get_employee_summary', { p_startup_id: startupId });
       if (error) throw error;
       if (data && Array.isArray(data) && data[0]) {
         const row = data[0];

@@ -5,8 +5,34 @@ import { UserRole } from '../types';
 import { authService, AuthUser } from '../lib/auth';
 import { storageService } from '../lib/storage';
 
+// Helper function to get currency based on country
+const getCurrencyForCountry = (country: string): string => {
+  const currencyMap: { [key: string]: string } = {
+    'United States': 'USD',
+    'India': 'INR',
+    'United Kingdom': 'GBP',
+    'Canada': 'CAD',
+    'Australia': 'AUD',
+    'Germany': 'EUR',
+    'France': 'EUR',
+    'Singapore': 'SGD',
+    'Japan': 'JPY',
+    'China': 'CNY',
+    'Brazil': 'BRL',
+    'Mexico': 'MXN',
+    'South Africa': 'ZAR',
+    'Nigeria': 'NGN',
+    'Kenya': 'KES',
+    'Egypt': 'EGP',
+    'UAE': 'AED',
+    'Saudi Arabia': 'SAR',
+    'Israel': 'ILS'
+  };
+  return currencyMap[country] || 'USD';
+};
+
 interface TwoStepRegistrationProps {
-  onRegister: (user: any, founders: any[], startupName?: string) => void;
+  onRegister: (user: any, founders: any[], startupName?: string, country?: string) => void;
   onNavigateToLogin: () => void;
   onNavigateToLanding?: () => void;
 }
@@ -24,6 +50,7 @@ export const TwoStepRegistration: React.FC<TwoStepRegistrationProps> = ({
     role: UserRole;
     startupName?: string;
     country: string;
+    investmentAdvisorCode?: string;
   } | null>(() => {
     // Try to restore data from localStorage
     const saved = localStorage.getItem('registrationData');
@@ -42,7 +69,6 @@ export const TwoStepRegistration: React.FC<TwoStepRegistrationProps> = ({
     password: string;
     role: UserRole;
     startupName?: string;
-    country: string;
   }) => {
     // Save data to localStorage
     localStorage.setItem('registrationData', JSON.stringify(data));
@@ -60,38 +86,117 @@ export const TwoStepRegistration: React.FC<TwoStepRegistrationProps> = ({
   const handleComplete = async (
     userData: any, 
     documents: any, 
-    founders: any[]
+    founders: any[],
+    country?: string
   ) => {
+    // Add timeout wrapper for the entire registration process
+    const registrationTimeout = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('Registration timed out after 60 seconds. Please try again.')), 60000);
+    });
+
     try {
       // Clear saved data after successful completion
       localStorage.removeItem('registrationData');
       
-      // Upload documents to storage
-      let governmentIdUrl = '';
-      let roleSpecificUrl = '';
+      console.log('🚀 Starting optimized registration process...');
+      
+      // Wrap the entire registration process with timeout
+      await Promise.race([
+        performRegistration(userData, documents, founders, country),
+        registrationTimeout
+      ]);
+      
+    } catch (error: any) {
+      console.error('Registration error:', error);
+      throw error;
+    }
+  };
 
+  const performRegistration = async (
+    userData: any, 
+    documents: any, 
+    founders: any[],
+    country?: string
+  ) => {
+    try {
+      
+      // Upload documents to storage in parallel for better performance
+      const uploadPromises = [];
+      
       if (documents.govId) {
-        const result = await storageService.uploadVerificationDocument(
-          documents.govId, 
-          userData.email, 
-          'government-id'
+        uploadPromises.push(
+          storageService.uploadVerificationDocument(
+            documents.govId, 
+            userData.email, 
+            'government-id'
+          ).then(result => ({ type: 'govId', result }))
         );
-        if (result.success && result.url) {
-          governmentIdUrl = result.url;
-        }
       }
 
       if (documents.roleSpecific) {
         const roleDocType = getRoleSpecificDocumentType(userData.role);
-        const result = await storageService.uploadVerificationDocument(
-          documents.roleSpecific, 
-          userData.email, 
-          roleDocType
+        uploadPromises.push(
+          storageService.uploadVerificationDocument(
+            documents.roleSpecific, 
+            userData.email, 
+            roleDocType
+          ).then(result => ({ type: 'roleSpecific', result }))
         );
-        if (result.success && result.url) {
-          roleSpecificUrl = result.url;
-        }
       }
+
+      // Upload license for Investment Advisors
+      if (documents.license && userData.role === 'Investment Advisor') {
+        uploadPromises.push(
+          storageService.uploadVerificationDocument(
+            documents.license, 
+            userData.email, 
+            'financial-advisor-license'
+          ).then(result => ({ type: 'license', result }))
+        );
+      }
+
+      // Upload logo for Investment Advisors
+      if (documents.logo && userData.role === 'Investment Advisor') {
+        uploadPromises.push(
+          storageService.uploadVerificationDocument(
+            documents.logo, 
+            userData.email, 
+            'company-logo'
+          ).then(result => ({ type: 'logo', result }))
+        );
+      }
+
+      console.log(`📤 Uploading ${uploadPromises.length} files in parallel...`);
+      
+      // Wait for all uploads to complete in parallel
+      const uploadResults = await Promise.all(uploadPromises);
+      
+      // Process upload results
+      let governmentIdUrl = '';
+      let roleSpecificUrl = '';
+      let licenseUrl = '';
+      let logoUrl = '';
+
+      uploadResults.forEach(({ type, result }) => {
+        if (result.success && result.url) {
+          switch (type) {
+            case 'govId':
+              governmentIdUrl = result.url;
+              break;
+            case 'roleSpecific':
+              roleSpecificUrl = result.url;
+              break;
+            case 'license':
+              licenseUrl = result.url;
+              break;
+            case 'logo':
+              logoUrl = result.url;
+              break;
+          }
+        }
+      });
+
+      console.log('✅ All file uploads completed');
 
       // Get current user to update their profile
       const { data: { user }, error: userError } = await authService.supabase.auth.getUser();
@@ -100,71 +205,120 @@ export const TwoStepRegistration: React.FC<TwoStepRegistrationProps> = ({
         throw new Error('User not authenticated');
       }
 
-      // Update user profile with documents
+      // Update user profile with documents, country, and other data
+      const updateData: any = {
+        government_id: governmentIdUrl,
+        ca_license: roleSpecificUrl,
+        verification_documents: [governmentIdUrl, roleSpecificUrl].filter(Boolean),
+        country: country, // Save country from second stage
+        updated_at: new Date().toISOString()
+      };
+
+      // Add Investment Advisor specific fields
+      if (userData.role === 'Investment Advisor') {
+        if (licenseUrl) {
+          updateData.financial_advisor_license_url = licenseUrl;
+        }
+        if (logoUrl) {
+          updateData.logo_url = logoUrl;
+        }
+        // Add license and logo to verification documents
+        updateData.verification_documents = [governmentIdUrl, roleSpecificUrl, licenseUrl, logoUrl].filter(Boolean);
+      }
+
+      // Add Investment Advisor code if provided
+      if (investmentAdvisorCode && investmentAdvisorCode.trim()) {
+        updateData.investment_advisor_code = investmentAdvisorCode.trim();
+      }
+
+      console.log('Updating user profile with data:', updateData);
+      console.log('User ID:', user.id);
+
       const { data: updatedProfile, error: updateError } = await authService.supabase
         .from('users')
-        .update({
-          government_id: governmentIdUrl,
-          ca_license: roleSpecificUrl,
-          verification_documents: [governmentIdUrl, roleSpecificUrl].filter(Boolean),
-          updated_at: new Date().toISOString()
-        })
+        .update(updateData)
         .eq('id', user.id)
         .select()
         .single();
 
       if (updateError) {
-        throw new Error('Failed to update user profile');
+        console.error('Update error:', updateError);
+        throw new Error(`Failed to update user profile: ${updateError.message}`);
       }
 
       // If user is a startup, ensure startup and founders are created
       if (userData.role === 'Startup') {
         try {
-          // Check if startup already exists
-          const { data: existingStartup } = await authService.supabase
+          console.log('🏢 Setting up startup and founders...');
+          
+          // Use upsert to create or update startup in one operation
+          const startupData: any = {
+            name: userData.startupName || `${userData.name}'s Startup`,
+            investment_type: 'Seed',
+            investment_value: 0,
+            equity_allocation: 0,
+            current_valuation: 0,
+            compliance_status: 'Pending',
+            sector: 'Technology',
+            total_funding: 0,
+            total_revenue: 0,
+            registration_date: new Date().toISOString().split('T')[0],
+            user_id: user.id,
+            country_of_registration: country, // Save country to startup
+            currency: getCurrencyForCountry(country) // Set currency based on country
+          };
+
+          // Add Investment Advisor code if provided
+          if (investmentAdvisorCode && investmentAdvisorCode.trim()) {
+            startupData.investment_advisor_code = investmentAdvisorCode.trim();
+          }
+
+          // Use upsert to handle both create and update cases
+          const { data: startupResult, error: startupError } = await authService.supabase
             .from('startups')
-            .select('id')
-            .eq('name', userData.startupName || `${userData.name}'s Startup`)
+            .upsert(startupData, { 
+              onConflict: 'name',
+              ignoreDuplicates: false 
+            })
+            .select()
             .single();
 
-          let startupId = existingStartup?.id;
-
-          if (!existingStartup) {
-            // Create startup if it doesn't exist
-            const { data: newStartup } = await authService.supabase
-              .from('startups')
-              .insert({
-                name: userData.startupName || `${userData.name}'s Startup`,
-                investment_type: 'Seed',
-                investment_value: 0,
-                equity_allocation: 0,
-                current_valuation: 0,
-                compliance_status: 'Pending',
-                sector: 'Technology',
-                total_funding: 0,
-                total_revenue: 0,
-                registration_date: new Date().toISOString().split('T')[0],
-                user_id: user.id
-              })
-              .select()
-              .single();
-            startupId = newStartup?.id;
+          if (startupError) {
+            console.error('Startup upsert error:', startupError);
+            throw new Error(`Failed to create/update startup: ${startupError.message}`);
           }
+
+          const startupId = startupResult?.id;
+          console.log('✅ Startup created/updated:', startupId);
 
           // Add founders if startup exists and founders provided
           if (startupId && founders.length > 0) {
+            console.log(`👥 Adding ${founders.length} founders...`);
+            
             const foundersData = founders.map(founder => ({
               startup_id: startupId,
               name: founder.name,
-              email: founder.email
+              email: founder.email,
+              equity_percentage: founder.equity || 0
             }));
 
-            await authService.supabase
+            const { error: foundersError } = await authService.supabase
               .from('founders')
-              .insert(foundersData);
+              .upsert(foundersData, { 
+                onConflict: 'startup_id,email',
+                ignoreDuplicates: false 
+              });
+
+            if (foundersError) {
+              console.error('Founders upsert error:', foundersError);
+              throw new Error(`Failed to create/update founders: ${foundersError.message}`);
+            }
+            
+            console.log('✅ Founders added successfully');
           }
         } catch (error) {
           console.error('Error handling startup/founders:', error);
+          throw error; // Re-throw to prevent silent failures
         }
       }
 
@@ -189,14 +343,20 @@ export const TwoStepRegistration: React.FC<TwoStepRegistrationProps> = ({
         ca_license: updatedProfile.ca_license,
         verification_documents: updatedProfile.verification_documents,
         profile_photo_url: updatedProfile.profile_photo_url,
-        is_profile_complete: true
+        is_profile_complete: true,
+        // Investment Advisor specific fields
+        investment_advisor_code: updatedProfile.investment_advisor_code,
+        logo_url: updatedProfile.logo_url,
+        proof_of_business_url: updatedProfile.proof_of_business_url,
+        financial_advisor_license_url: updatedProfile.financial_advisor_license_url
       };
 
       // Registration successful
       onRegister(
         authUser, 
         userData.role === 'Startup' ? founders : [], 
-        userData.role === 'Startup' ? userData.startupName : undefined
+        userData.role === 'Startup' ? userData.startupName : undefined,
+        country
       );
 
     } catch (error: any) {
@@ -213,6 +373,7 @@ export const TwoStepRegistration: React.FC<TwoStepRegistrationProps> = ({
       case 'CA': return 'ca-license';
       case 'CS': return 'cs-license';
       case 'Startup Facilitation Center': return 'org-registration';
+      case 'Investment Advisor': return 'financial-advisor-license';
       default: return 'document';
     }
   };

@@ -6,18 +6,24 @@ import Input from '../ui/Input';
 import SimpleModal from '../ui/SimpleModal';
 import Select from '../ui/Select';
 import Modal from '../ui/Modal';
+import DateInput from '../DateInput';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { Plus, Trash2, Edit3, Save, X, TrendingUp, Users, DollarSign, PieChart as PieChartIcon, UserPlus, Download, Upload, Check, Eye, RefreshCw } from 'lucide-react';
+import PricePerShareInput from './PricePerShareInput';
 import { capTableService } from '../../lib/capTableService';
-import { startupAdditionService } from '../../lib/database';
+import { startupAdditionService, investmentService } from '../../lib/database';
 import { incubationProgramsService } from '../../lib/incubationProgramsService';
 import { financialsService } from '../../lib/financialsService';
 import { validationService } from '../../lib/validationService';
 import { recognitionService } from '../../lib/recognitionService';
 import { storageService } from '../../lib/storage';
+import { employeesService } from '../../lib/employeesService';
 import { AuthUser } from '../../lib/auth';
 import { supabase } from '../../lib/supabase';
 import { Loader2 } from 'lucide-react';
+import { formatCurrency, formatCurrencyCompact, getCurrencyForCountry } from '../../lib/utils';
+import { useStartupCurrency } from '../../lib/hooks/useStartupCurrency';
+import { generateInvestorListPDF, generateIndividualInvestorPDF, downloadBlob, InvestorReportData, IndividualInvestorReportData, PDFReportOptions } from '../../lib/pdfGenerator';
 
 interface CapTableTabProps {
   startup: Startup;
@@ -58,26 +64,68 @@ interface EquityDistributionData {
 interface OfferReceived {
   id: string;
   from: string;
-  type: 'Incubation' | 'Due Diligence';
+  type: 'Incubation' | 'Due Diligence' | 'Investment';
   offerDetails: string;
   status: 'pending' | 'accepted' | 'rejected';
   code: string;
   agreementUrl?: string;
-  applicationId: string;
+  applicationId?: string;
   createdAt: string;
+  isInvestmentOffer?: boolean;
+  investmentOfferId?: number;
+  startupScoutingFee?: number;
+  investorScoutingFee?: number;
+  contactDetailsRevealed?: boolean;
 }
 
-const formatCurrency = (value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
-const formatCurrencyCompact = (value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact' }).format(value);
+// Currency formatting functions - using startup's currency
+const formatCurrencyLocal = (value: number, currency: string) => formatCurrency(value, currency);
+const formatCurrencyCompactLocal = (value: number, currency: string) => formatCurrencyCompact(value, currency);
 
 const COLORS = ['#1e40af', '#1d4ed8', '#3b82f6', '#60a5fa'];
 
 const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onActivateFundraising, onInvestorAdded, onUpdateFounders, isViewOnly }) => {
+    const startupCurrency = useStartupCurrency(startup);
     const [isEditing, setIsEditing] = useState(false);
     const [isFundraisingModalOpen, setIsFundraisingModalOpen] = useState(false);
     const [isAddInvestorModalOpen, setIsAddInvestorModalOpen] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    
+    // Debug startup object - FORCE VISIBLE
+    // Component initialized successfully
+    
+    // Direct database check
+    useEffect(() => {
+        const checkDatabaseDirectly = async () => {
+            if (startup?.id) {
+                console.log('🔍 DIRECT DATABASE CHECK FOR STARTUP ID:', startup.id);
+                
+                // Check founders directly
+                const { data: foundersData, error: foundersError } = await supabase
+                    .from('founders')
+                    .select('*')
+                    .eq('startup_id', startup.id);
+                console.log('🔍 Direct founders query result:', foundersData, foundersError);
+                
+                // Check startup_shares directly
+                const { data: sharesData, error: sharesError } = await supabase
+                    .from('startup_shares')
+                    .select('*')
+                    .eq('startup_id', startup.id);
+                console.log('🔍 Direct shares query result:', sharesData, sharesError);
+                
+                // Check startups table for profile data
+                const { data: profileData, error: profileError } = await supabase
+                    .from('startups')
+                    .select('country_of_registration, company_type, registration_date, currency, country, total_shares, price_per_share, esop_reserved_shares')
+                    .eq('id', startup.id);
+                console.log('🔍 Direct profile query result:', profileData, profileError);
+            }
+        };
+        
+        checkDatabaseDirectly();
+    }, [startup?.id]);
     
     // Real data states
     const [investmentRecords, setInvestmentRecords] = useState<InvestmentRecord[]>([]);
@@ -86,6 +134,7 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
     const [fundraisingDetails, setFundraisingDetails] = useState<FundraisingDetails[]>([]);
     const [valuationHistory, setValuationHistory] = useState<ValuationHistoryData[]>([]);
     const [equityDistribution, setEquityDistribution] = useState<EquityDistributionData[]>([]);
+    const [employees, setEmployees] = useState<any[]>([]);
     const [investmentSummary, setInvestmentSummary] = useState<InvestmentSummary>({
         totalEquityFunding: 0,
         totalDebtFunding: 0,
@@ -117,33 +166,42 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
     const [editingFounders, setEditingFounders] = useState<FounderStateItem[]>([]);
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
     const [investmentToDelete, setInvestmentToDelete] = useState<InvestmentRecord | null>(null);
+    const [isEditInvestmentModalOpen, setIsEditInvestmentModalOpen] = useState(false);
+    const [editingInvestment, setEditingInvestment] = useState<InvestmentRecord | null>(null);
     
     // Incubation Programs states
     const [incubationPrograms, setIncubationPrograms] = useState<IncubationProgram[]>([]);
-    const [isAddProgramModalOpen, setIsAddProgramModalOpen] = useState(false);
     const [isDeleteProgramModalOpen, setIsDeleteProgramModalOpen] = useState(false);
     const [programToDelete, setProgramToDelete] = useState<IncubationProgram | null>(null);
-    const [newProgram, setNewProgram] = useState<AddIncubationProgramData>({
-        programName: '',
-        programType: 'Acceleration',
-        startDate: '',
-        endDate: '',
-        description: '',
-        mentorName: '',
-        mentorEmail: '',
-        programUrl: ''
-    });
     const [popularPrograms, setPopularPrograms] = useState<string[]>([]);
     const [financialRecords, setFinancialRecords] = useState<any[]>([]);
-    const [totalShares, setTotalShares] = useState<number>(0);
-    const [totalSharesDraft, setTotalSharesDraft] = useState<string>('0');
+    // Total shares are now calculated automatically
     const [pricePerShare, setPricePerShare] = useState<number>(0);
+    // Startup profile data from second stage registration
+    const [startupProfileData, setStartupProfileData] = useState<any>(null);
     // Draft states for investment auto-calculations
     const [invAmountDraft, setInvAmountDraft] = useState<string>('');
     const [invEquityDraft, setInvEquityDraft] = useState<string>('');
     const [invPostMoneyDraft, setInvPostMoneyDraft] = useState<string>('');
-    const [isSavingShares, setIsSavingShares] = useState<boolean>(false);
-    const [isSharesModalOpen, setIsSharesModalOpen] = useState(false);
+    // New shares-based calculation states
+    const [invSharesDraft, setInvSharesDraft] = useState<string>('');
+    const [invPricePerShareDraft, setInvPricePerShareDraft] = useState<string>('');
+    // Removed isSavingShares - no longer needed since total shares are calculated automatically
+
+    // Utility function to validate total shares allocation
+    const validateSharesAllocation = (newShares: number, excludeInvestmentId?: string): { isValid: boolean; message?: string; availableShares: number } => {
+        // Since total shares are now calculated automatically, this validation is no longer needed
+        // Total shares will always equal the sum of all allocated shares
+        return { isValid: true, availableShares: 0 };
+    };
+
+    // Utility function to validate and fix founder shares
+    const validateAndFixFounderShares = (): { isValid: boolean; message?: string; fixedFounders?: any[] } => {
+        // Since total shares are now calculated automatically, this validation is no longer needed
+        // Total shares will always equal the sum of all allocated shares
+        return { isValid: true };
+    };
+    // Removed isSharesModalOpen - no longer needed since total shares are calculated automatically
 
     // Offers Received states
     const [offersReceived, setOffersReceived] = useState<OfferReceived[]>([]);
@@ -152,27 +210,109 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
     // Load data on component mount
     useEffect(() => {
         console.log('🔄 useEffect triggered - loading data for startup:', startup?.id);
-        loadCapTableData();
-        loadOffersReceived();
-        setupRealTimeSubscriptions();
-    }, [startup.id]);
+        if (startup?.id) {
+            loadCapTableData();
+            loadOffersReceived();
+            setupRealTimeSubscriptions();
+        }
+    }, [startup?.id]); // Only depend on startup.id, not the entire startup object
 
-    // Auto-calc post-money when amount or equity changes
+    // Validate shares allocation when data changes
     useEffect(() => {
-        const amount = Number(invAmountDraft);
-        const equity = Number(invEquityDraft);
-        if (Number.isFinite(amount) && amount > 0 && Number.isFinite(equity) && equity > 0) {
-            const post = (amount * 100) / equity;
-            setInvPostMoneyDraft(String(post));
-        } else {
+        if (founders.length > 0) {
+            const validation = validateAndFixFounderShares();
+            if (!validation.isValid) {
+                console.warn('⚠️ Shares allocation issue detected:', validation.message);
+                // You could show a toast notification here
+            }
+        }
+    }, [founders, investmentRecords, startup.esopReservedShares]);
+
+    // Legacy calculation removed - now using shares-based calculation only
+
+    // Auto-calc investment amount, equity, and post-money when shares or price changes
+    useEffect(() => {
+        const shares = Number(invSharesDraft);
+        const pricePerShare = Number(invPricePerShareDraft);
+        
+        console.log('🔄 Auto-calculation triggered:', { shares, pricePerShare, invSharesDraft, invPricePerShareDraft });
+        
+        if (Number.isFinite(shares) && shares > 0 && Number.isFinite(pricePerShare) && pricePerShare > 0) {
+            // Calculate investment amount
+            const amount = shares * pricePerShare;
+            setInvAmountDraft(String(amount));
+            
+            // Calculate equity percentage based on shares
+            const totalFounderShares = founders.reduce((sum, founder) => sum + (founder.shares || 0), 0);
+            const totalInvestorShares = investmentRecords.reduce((sum, inv) => sum + (inv.shares || 0), 0);
+            const esopReservedShares = startup.esopReservedShares || 0;
+            const currentTotalShares = totalFounderShares + totalInvestorShares + esopReservedShares;
+            
+            // Include the new shares in the total for post-money calculation
+            const postMoneyTotalShares = currentTotalShares + shares;
+            
+            console.log('📊 Share calculation details:', {
+                totalFounderShares,
+                totalInvestorShares,
+                esopReservedShares,
+                currentTotalShares,
+                postMoneyTotalShares,
+                shares
+            });
+            
+            if (postMoneyTotalShares > 0) {
+                const equityPercentage = (shares / postMoneyTotalShares) * 100;
+                setInvEquityDraft(String(equityPercentage.toFixed(2)));
+                
+                // Calculate post-money valuation
+                const postMoney = (amount * 100) / equityPercentage;
+                setInvPostMoneyDraft(String(postMoney.toFixed(2)));
+                
+                console.log('✅ Calculations completed:', {
+                    amount,
+                    equityPercentage: equityPercentage.toFixed(2),
+                    postMoney: postMoney.toFixed(2),
+                    currentTotalShares,
+                    postMoneyTotalShares,
+                    shares
+                });
+            } else {
+                // Fallback: if no existing shares, use a reasonable default
+                // Assume founders will have shares (common startup scenario)
+                console.log('⚠️ No existing shares found, using fallback calculation');
+                
+                // Use a reasonable assumption: if this is the first investment, 
+                // assume founders will have 80% and this investment gets 20%
+                const assumedFounderShares = shares * 4; // 4x the investment shares
+                const totalSharesWithFounders = assumedFounderShares + shares;
+                const equityPercentage = (shares / totalSharesWithFounders) * 100;
+                
+                setInvEquityDraft(String(equityPercentage.toFixed(2)));
+                setInvPostMoneyDraft(String(amount.toFixed(2)));
+                
+                console.log('📊 Fallback calculation:', {
+                    assumedFounderShares,
+                    totalSharesWithFounders,
+                    equityPercentage: equityPercentage.toFixed(2),
+                    amount
+                });
+            }
+        } else if (shares === 0 || pricePerShare === 0) {
+            // Clear calculations if either field is empty
+            setInvAmountDraft('');
+            setInvEquityDraft('');
             setInvPostMoneyDraft('');
         }
-    }, [invAmountDraft, invEquityDraft]);
+    }, [invSharesDraft, invPricePerShareDraft, founders, investmentRecords, startup.esopReservedShares]);
 
     // Recompute price per share whenever shares or valuation data changes
     useEffect(() => {
-        const sharesNum = Number(totalShares) || 0;
-        if (sharesNum <= 0) {
+        const totalFounderShares = founders.reduce((sum, founder) => sum + (founder.shares || 0), 0);
+        const totalInvestorShares = investmentRecords.reduce((sum, inv) => sum + (inv.shares || 0), 0);
+        const esopReservedShares = startup.esopReservedShares || 0;
+        const calculatedTotalShares = totalFounderShares + totalInvestorShares + esopReservedShares;
+        
+        if (calculatedTotalShares <= 0) {
             setPricePerShare(0);
             return;
         }
@@ -185,9 +325,9 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                 latestValuation = latest.postMoneyValuation;
             }
         }
-        const computed = latestValuation > 0 ? (latestValuation / sharesNum) : 0;
+        const computed = latestValuation > 0 ? (latestValuation / calculatedTotalShares) : 0;
         setPricePerShare(computed);
-    }, [totalShares, investmentRecords, startup.currentValuation]);
+    }, [founders, investmentRecords, startup.currentValuation, startup.esopReservedShares]);
 
     // Real-time subscription for offers received
     useEffect(() => {
@@ -260,6 +400,9 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
     const loadCapTableData = async () => {
         if (!startup?.id) return;
         
+        console.log('🔍 CapTableTab loading data for startup ID:', startup.id);
+        console.log('🔍 Startup object:', startup);
+        
         setIsLoading(true);
         setError(null);
         
@@ -275,7 +418,9 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                 incubationProgramsData,
                 popularProgramsData,
                 financialRecordsData,
-                recognitionData
+                recognitionData,
+                startupData,
+                employeesData
             ] = await Promise.allSettled([
                             capTableService.getInvestmentRecords(startup.id),
             capTableService.getFounders(startup.id),
@@ -283,16 +428,31 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
             capTableService.getValuationHistoryData(startup.id),
             capTableService.getEquityDistributionData(startup.id),
             capTableService.getInvestmentSummary(startup.id),
-            capTableService.getTotalShares(startup.id),
+            capTableService.getStartupSharesData(startup.id),
                             incubationProgramsService.getIncubationPrograms(startup.id),
                 incubationProgramsService.getPopularPrograms(),
                 financialsService.getFinancialRecords(startup.id),
-                recognitionService.getRecognitionRecordsByStartupId(startup.id)
+                recognitionService.getRecognitionRecordsByStartupId(startup.id),
+                // Load startup data to get country, registration info, and profile data (all from startups table)
+                supabase.from('startups').select('country_of_registration, company_type, registration_date, currency, country, total_shares, price_per_share, esop_reserved_shares').eq('id', startup.id).single(),
+                employeesService.getEmployees(startup.id)
             ]);
 
             // Handle each result individually
             setInvestmentRecords(records.status === 'fulfilled' ? records.value : []);
-            setFounders(foundersData.status === 'fulfilled' ? foundersData.value : []);
+            const foundersResult = foundersData.status === 'fulfilled' ? foundersData.value : [];
+            console.log('🔍 Founders data loaded:', foundersResult);
+            console.log('🔍 Founders data status:', foundersData.status);
+            if (foundersData.status === 'rejected') {
+                console.error('❌ Founders data loading failed:', foundersData.reason);
+            }
+            setFounders(foundersResult);
+            
+            // Debug all the data loading results
+            console.log('🔍 All data loading results:');
+            console.log('Records:', records.status, records.status === 'fulfilled' ? records.value.length : records.reason);
+            console.log('Founders:', foundersData.status, foundersData.status === 'fulfilled' ? foundersData.value.length : foundersData.reason);
+            console.log('Total Shares:', totalSharesData.status, totalSharesData.status === 'fulfilled' ? totalSharesData.value : totalSharesData.reason);
             setFundraisingDetails(fundraisingData.status === 'fulfilled' ? fundraisingData.value : []);
             setValuationHistory(valuationData.status === 'fulfilled' ? valuationData.value.map(item => ({
                 roundName: item.round_name,
@@ -305,6 +465,7 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                 equityPercentage: item.equity_percentage,
                 totalAmount: item.total_amount
             })) : []);
+            setEmployees(employeesData.status === 'fulfilled' ? employeesData.value : []);
             setInvestmentSummary(summaryData.status === 'fulfilled' ? {
                 totalEquityFunding: summaryData.value.total_equity_funding || 0,
                 totalDebtFunding: summaryData.value.total_debt_funding || 0,
@@ -319,14 +480,45 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                 avgEquityAllocated: 0
             });
 
-            // Handle total shares
+            // Handle shares data - only load ESOP reserved shares and price per share
             if (totalSharesData.status === 'fulfilled') {
-                const shares = Number(totalSharesData.value) || 0;
-                setTotalShares(shares);
-                setTotalSharesDraft(String(shares));
+                const sharesData = totalSharesData.value;
+                const esopShares = Number(sharesData.esopReservedShares) || 0;
+                const pricePerShare = Number(sharesData.pricePerShare) || 0;
+                
+                console.log('🔍 Shares data loaded:', { esopShares, pricePerShare });
+                console.log('🔍 Raw shares data:', sharesData);
+                console.log('🔍 Setting price per share to:', pricePerShare);
+                
+                setPricePerShare(pricePerShare);
+                
+                // Update startup object with ESOP reserved shares
+                if (startup) {
+                    startup.esopReservedShares = esopShares;
+                }
             } else {
-                setTotalShares(0);
-                setTotalSharesDraft('0');
+                console.error('❌ Shares data loading failed:', totalSharesData.reason);
+                // Try to load from startup_profiles table as fallback
+                try {
+                    const { data: profileData } = await supabase
+                        .from('startup_profiles')
+                        .select('price_per_share, esop_reserved_shares')
+                        .eq('startup_id', startup.id)
+                        .single();
+                    
+                    if (profileData) {
+                        console.log('🔄 Fallback: Loading shares from startup_profiles:', profileData);
+                        setPricePerShare(profileData.price_per_share || 0);
+                        if (startup) {
+                            startup.esopReservedShares = profileData.esop_reserved_shares || 0;
+                        }
+                    } else {
+                        setPricePerShare(0);
+                    }
+                } catch (fallbackError) {
+                    console.error('❌ Fallback shares loading also failed:', fallbackError);
+                    setPricePerShare(0);
+                }
             }
 
             // Set current fundraising details if available
@@ -341,6 +533,27 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
             } else {
                 console.error('Failed to load recognition records:', recognitionData.reason);
             }
+
+            // Handle startup profile data
+            console.log('🔍 Processing startup profile data...');
+            console.log('🔍 Startup data status:', startupData.status);
+            
+            if (startupData.status === 'rejected') {
+                console.error('❌ Startup data loading failed:', startupData.reason);
+            }
+            
+            const startupDataResult = startupData.status === 'fulfilled' ? startupData.value : null;
+            
+            console.log('🔍 Startup data result:', startupDataResult);
+            
+            if (startupDataResult) {
+                setStartupProfileData(startupDataResult);
+                console.log('✅ Startup profile data loaded and set:', startupDataResult);
+            } else {
+                console.log('⚠️ No startup profile data available');
+            }
+
+            // Currency is now handled by the useStartupCurrency hook
 
             // Log any errors for debugging
             [records, foundersData, fundraisingData, valuationData, equityData, summaryData, incubationProgramsData, popularProgramsData, financialRecordsData, recognitionData].forEach((result, index) => {
@@ -489,11 +702,29 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
 
     const handleFounderChange = (id: number, field: keyof Omit<FounderStateItem, 'id'>, value: string) => {
         console.log('✏️ Editing founder:', { id, field, value });
-        setEditingFounders(editingFounders.map(f => f.id === id ? { ...f, [field]: value } : f));
+        setEditingFounders(editingFounders.map(f => {
+            if (f.id === id) {
+                const updatedFounder = { ...f };
+                if (field === 'equityPercentage' || field === 'shares') {
+                    // Convert to number for numeric fields
+                    updatedFounder[field] = value === '' ? undefined : Number(value);
+                } else {
+                    updatedFounder[field] = value;
+                }
+                return updatedFounder;
+            }
+            return f;
+        }));
     };
 
     const handleAddFounder = () => {
-        setEditingFounders([...editingFounders, { id: Date.now(), name: '', email: '' }]);
+        setEditingFounders([...editingFounders, { 
+            id: Date.now(), 
+            name: '', 
+            email: '', 
+            equityPercentage: undefined, 
+            shares: undefined 
+        }]);
     };
     
     const handleRemoveFounder = (id: number) => {
@@ -507,7 +738,21 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
         
         try {
             const finalFounders = editingFounders.map(({ id, ...rest }) => rest);
-            console.log('💾 Saving founders:', finalFounders);
+            
+            // Validate shares allocation before saving
+            const totalFounderShares = finalFounders.reduce((sum, founder) => sum + (founder.shares || 0), 0);
+            const totalInvestorShares = investmentRecords.reduce((sum, inv) => sum + (inv.shares || 0), 0);
+            const esopReservedShares = startup.esopReservedShares || 0;
+            const totalAllocatedShares = totalFounderShares + totalInvestorShares + esopReservedShares;
+            
+            // No need to check for over-allocation since total shares are now calculated automatically
+            
+            console.log('💾 Saving founders with equity data:', finalFounders.map(f => ({
+                name: f.name,
+                email: f.email,
+                equityPercentage: f.equityPercentage,
+                shares: f.shares
+            })));
             
             // Clear existing founders and add new ones
             await capTableService.deleteAllFounders(startup.id);
@@ -515,11 +760,16 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
             
             for (const founder of finalFounders) {
                 await capTableService.addFounder(startup.id, founder);
-                console.log('➕ Added founder:', founder.name);
+                console.log('➕ Added founder with equity:', {
+                    name: founder.name,
+                    equityPercentage: founder.equityPercentage,
+                    shares: founder.shares
+                });
             }
             
             onUpdateFounders(startup.id, finalFounders);
             setIsFounderModalOpen(false);
+            setError(null); // Clear any previous errors
             console.log('✅ Founders saved successfully');
         } catch (err) {
             console.error('Error saving founders:', err);
@@ -636,24 +886,43 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
     };
 
     const handleAddInvestment = async (e: React.FormEvent<HTMLFormElement>) => {
+        console.log('🎯 handleAddInvestment called!');
         e.preventDefault();
-        if (!startup?.id) return;
+        if (!startup?.id) {
+            console.error('❌ No startup ID found!');
+            return;
+        }
         
         try {
             const formData = new FormData(e.currentTarget);
             const proofFile = (e.currentTarget.querySelector('input[name="inv-proof"]') as HTMLInputElement)?.files?.[0];
             
             // Debug form data
+            console.log('🔍 Investment Form Debug:');
             console.log('Form data entries:');
             for (const [key, value] of formData.entries()) {
                 console.log(`${key}: ${value}`);
             }
+            
+            // Debug current state
+            console.log('Current state values:');
+            console.log('invSharesDraft:', invSharesDraft);
+            console.log('invPricePerShareDraft:', invPricePerShareDraft);
+            console.log('invAmountDraft:', invAmountDraft);
+            console.log('invEquityDraft:', invEquityDraft);
+            console.log('invPostMoneyDraft:', invPostMoneyDraft);
+            // totalShares removed - now calculated automatically
+            console.log('esopReservedShares:', startup.esopReservedShares);
+            console.log('founders:', founders.map(f => ({ name: f.name, shares: f.shares })));
+            console.log('investmentRecords:', investmentRecords.map(inv => ({ name: inv.investorName, shares: inv.shares })));
             
             const date = formData.get('inv-date') as string;
             const investorType = formData.get('inv-investor-type') as InvestorType;
             const investmentType = formData.get('inv-type') as InvestmentRoundType;
             const investorName = formData.get('inv-name') as string;
             const investorCode = formData.get('inv-code') as string;
+            const shares = Number(invSharesDraft);
+            const pricePerShare = Number(invPricePerShareDraft);
             const amount = Number(invAmountDraft);
             const equityAllocated = Number(invEquityDraft);
             const postMoneyValuation = Number(invPostMoneyDraft) || ((equityAllocated && equityAllocated > 0) ? (amount * 100) / equityAllocated : 0);
@@ -675,12 +944,37 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                 setError('Investor name is required');
                 return;
             }
+            if (!shares || shares <= 0) {
+                setError('Valid number of shares is required');
+                return;
+            }
+            if (!pricePerShare || pricePerShare <= 0) {
+                setError('Valid price per share is required');
+                return;
+            }
             if (!amount || amount <= 0) {
                 setError('Valid investment amount is required');
                 return;
             }
             if (!equityAllocated || equityAllocated < 0) {
                 setError('Valid equity allocation is required');
+                return;
+            }
+            
+            // Validate that total shares don't exceed available shares
+            console.log('🔍 Shares Validation Debug:');
+            console.log('Requested shares:', shares);
+            // Total shares now calculated automatically
+            console.log('ESOP reserved shares:', startup.esopReservedShares);
+            console.log('Founder shares:', founders.reduce((sum, founder) => sum + (founder.shares || 0), 0));
+            console.log('Existing investor shares:', investmentRecords.reduce((sum, inv) => sum + (inv.shares || 0), 0));
+            
+            const validation = validateSharesAllocation(shares);
+            console.log('Validation result:', validation);
+            
+            if (!validation.isValid) {
+                console.error('❌ Shares validation failed:', validation.message);
+                setError(validation.message || 'Invalid shares allocation');
                 return;
             }
             if (!postMoneyValuation || postMoneyValuation <= 0) {
@@ -703,6 +997,8 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                 investorCode,
                 amount,
                 equityAllocated,
+                shares,
+                pricePerShare,
                 postMoneyValuation: postMoneyValuation,
                 proofUrl
             };
@@ -724,6 +1020,8 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
             setInvAmountDraft('');
             setInvEquityDraft('');
             setInvPostMoneyDraft('');
+            setInvSharesDraft('');
+            setInvPricePerShareDraft('');
 
             // Note: Investor code validation can be added here in the future
             if (investorCode && investorCode.trim().length > 0) {
@@ -936,10 +1234,20 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
     };
 
     const handleEntrySubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-        if (entryType === 'investment') {
-            await handleAddInvestment(e);
-        } else {
-            await handleAddRecognition(e);
+        console.log('🚀 Form submitted! Entry type:', entryType);
+        e.preventDefault();
+        
+        try {
+            if (entryType === 'investment') {
+                console.log('📈 Calling handleAddInvestment...');
+                await handleAddInvestment(e);
+            } else {
+                console.log('🏆 Calling handleAddRecognition...');
+                await handleAddRecognition(e);
+            }
+        } catch (error) {
+            console.error('❌ Error in handleEntrySubmit:', error);
+            setError('Failed to submit form. Please try again.');
         }
     };
 
@@ -951,6 +1259,12 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
 
     const handleEditInvestment = (investment: InvestmentRecord) => {
         console.log('🔧 Editing investment:', investment);
+        setEditingInvestment(investment);
+        setIsEditInvestmentModalOpen(true);
+    };
+
+    const handleEditIncubationProgram = (program: any) => {
+        console.log('🔧 Editing incubation program:', program);
         // TODO: Implement edit modal functionality
         alert('Edit functionality will be implemented in the next update');
     };
@@ -974,28 +1288,6 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
     // INCUBATION PROGRAMS HANDLERS
     // =====================================================
 
-    const handleAddProgram = async () => {
-        if (!startup?.id) return;
-        
-        try {
-            await incubationProgramsService.addIncubationProgram(startup.id, newProgram);
-            setIsAddProgramModalOpen(false);
-            setNewProgram({
-                programName: '',
-                programType: 'Acceleration',
-                startDate: '',
-                endDate: '',
-                description: '',
-                mentorName: '',
-                mentorEmail: '',
-                programUrl: ''
-            });
-            await loadCapTableData();
-        } catch (err) {
-            console.error('Error adding program:', err);
-            setError('Failed to add program');
-        }
-    };
 
     const handleDeleteProgram = async (programId: string) => {
         if (!startup?.id) return;
@@ -1016,21 +1308,116 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
         setIsDeleteProgramModalOpen(true);
     };
 
-    const handleProgramNameChange = (programName: string) => {
-        setNewProgram({ ...newProgram, programName });
+    // Handle download fund utilization report
+    const handleDownloadFundUtilizationReport = async () => {
+        try {
+            // Prepare report data for PDF (using plain numbers without currency formatting)
+            const reportData: InvestorReportData[] = investmentRecords.map(inv => {
+                const utilization = calculateInvestorUtilization(inv.investorName, inv.amount);
+                return {
+                    investorName: inv.investorName,
+                    investmentAmount: inv.amount.toLocaleString(),
+                    equityAllocated: `${inv.equityAllocated}%`,
+                    utilized: utilization.utilized.toLocaleString(),
+                    remainingFunds: (inv.amount - utilization.utilized).toLocaleString(),
+                    investmentDate: new Date(inv.date).toLocaleDateString()
+                };
+            });
+
+            // PDF options
+            const options: PDFReportOptions = {
+                title: 'Fund Utilization Report',
+                subtitle: 'Investor Investment Summary',
+                companyName: startup.name,
+                generatedDate: new Date().toLocaleDateString(),
+                currency: startupCurrency
+            };
+
+            // Generate PDF
+            const pdfBlob = await generateInvestorListPDF(reportData, options);
+            
+            // Download PDF
+            const filename = `fund-utilization-report-${startup.name.replace(/[^a-zA-Z0-9]/g, '-')}-${new Date().toISOString().split('T')[0]}.pdf`;
+            downloadBlob(pdfBlob, filename);
+
+            console.log('✅ Fund utilization report downloaded successfully as PDF');
+        } catch (error) {
+            console.error('❌ Error generating fund utilization report:', error);
+            alert('Failed to generate fund utilization report. Please try again.');
+        }
     };
 
-    const handleProgramTypeChange = (programType: 'Incubation' | 'Acceleration' | 'Mentorship' | 'Bootcamp') => {
-        setNewProgram({ ...newProgram, programType });
+    // Handle download individual fund utilization report
+    const handleDownloadIndividualFundReport = async (investment: InvestmentRecord) => {
+        try {
+            const utilization = calculateInvestorUtilization(investment.investorName, investment.amount);
+            
+            // Get detailed expense records for this investor
+            // Use only the investor name to match funding sources (same as calculateInvestorUtilization)
+            const investorFundingSource = investment.investorName;
+            const expenseRecords = financialRecords.filter(record => 
+                record.record_type === 'expense' && 
+                record.funding_source && 
+                record.funding_source.toLowerCase() === investorFundingSource.toLowerCase()
+            );
+
+            // Debug logging
+            console.log('🔍 PDF Generation Debug:', {
+                investorName: investment.investorName,
+                investorFundingSource,
+                totalFinancialRecords: financialRecords.length,
+                expenseRecordsFound: expenseRecords.length,
+                utilization: utilization,
+                allFundingSources: financialRecords
+                    .filter(record => record.funding_source)
+                    .map(record => record.funding_source)
+                    .filter((value, index, self) => self.indexOf(value) === index) // unique values
+            });
+
+            // Prepare detailed report data for PDF (using plain numbers without currency formatting)
+            const reportData: IndividualInvestorReportData[] = expenseRecords.map(expense => ({
+                date: new Date(expense.date).toLocaleDateString(),
+                description: expense.description || 'N/A',
+                amount: (expense.amount || 0).toLocaleString(),
+                fundingSource: expense.funding_source || 'N/A',
+                remainingFunds: (investment.amount - utilization.utilized).toLocaleString()
+            }));
+
+            // PDF options (using plain numbers without currency formatting)
+            const options: PDFReportOptions = {
+                title: 'Individual Fund Utilization Report',
+                subtitle: `Detailed expense breakdown for ${investment.investorName} (${utilization.percentage.toFixed(2)}% utilized)`,
+                companyName: startup.name,
+                generatedDate: new Date().toLocaleDateString(),
+                currency: startupCurrency,
+                investmentAmount: investment.amount.toLocaleString(),
+                equityAllocated: `${investment.equityAllocated}%`,
+                utilizedAmount: utilization.utilized.toLocaleString(),
+                remainingAmount: (investment.amount - utilization.utilized).toLocaleString()
+            };
+
+            // Generate PDF
+            const pdfBlob = await generateIndividualInvestorPDF(investment.investorName, reportData, options);
+            
+            // Download PDF
+            const filename = `fund-utilization-${investment.investorName.replace(/[^a-zA-Z0-9]/g, '-')}-${new Date().toISOString().split('T')[0]}.pdf`;
+            downloadBlob(pdfBlob, filename);
+
+            console.log('✅ Individual fund utilization report downloaded successfully as PDF');
+        } catch (error) {
+            console.error('❌ Error generating individual fund utilization report:', error);
+            alert('Failed to generate individual fund utilization report. Please try again.');
+        }
     };
+
 
     // =====================================================
     // UTILIZATION CALCULATION
     // =====================================================
 
     const calculateInvestorUtilization = (investorName: string, investmentAmount: number): { utilized: number; percentage: number } => {
-        // Get all expenses that use this investor's funding source
-        const investorFundingSource = `${investorName} (Equity)`;
+        // Use only the investor name to match funding sources (no type suffix)
+        const investorFundingSource = investorName;
         
         // Debug logging for pooja specifically
         if (investorName.toLowerCase().includes('pooja')) {
@@ -1082,7 +1469,7 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                     />
                 </div>
                 <div className="text-xs text-slate-600">
-                    {formatCurrency(utilized)} Utilized ({percentage.toFixed(4)}%)
+                    {formatCurrency(utilized, startupCurrency)} Utilized ({percentage.toFixed(4)}%)
                 </div>
             </div>
         );
@@ -1096,27 +1483,45 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
              investment: Number(inv.amount) || 0
          })).filter(item => item.valuation > 0 || item.investment > 0) : [];
 
-     // Calculate equity distribution from investment records and founders
+     // Calculate equity distribution from investment records, founders, and ESOP
      const equityData = (() => {
          const distribution: { name: string; value: number }[] = [];
          
-         // Add founders equity
-         if (founders.length > 0) {
-             const totalInvestorEquity = investmentRecords.reduce((sum, inv) => sum + (inv.equityAllocated || 0), 0);
-             const founderEquity = Math.max(0, 100 - totalInvestorEquity);
-             const equityPerFounder = founderEquity / founders.length;
-             
-             founders.forEach(founder => {
-                 distribution.push({
-                     name: `Founder (${founder.name})`,
-                     value: equityPerFounder
-                 });
-             });
-         }
+         // Calculate total allocated shares (this is now the total shares)
+         const totalFounderShares = founders.reduce((sum, founder) => sum + (founder.shares || 0), 0);
+         const totalInvestorShares = investmentRecords.reduce((sum, inv) => sum + (inv.shares || 0), 0);
+         const esopReservedShares = startup.esopReservedShares || 0;
+         const calculatedTotalShares = totalFounderShares + totalInvestorShares + esopReservedShares;
          
-         // Add investor equity
+         // No normalization needed since total shares = total allocated shares
+         
+         // Add founders equity - use shares-based calculation
+         founders.forEach(founder => {
+             if (founder.shares && founder.shares > 0 && calculatedTotalShares > 0) {
+                 const founderPercentage = (founder.shares / calculatedTotalShares) * 100;
+                 
+                 if (founderPercentage > 0) {
+                     distribution.push({
+                         name: `Founder (${founder.name})`,
+                         value: founderPercentage
+                     });
+                 }
+             }
+         });
+         
+         // Add investor equity - use shares-based calculation
          investmentRecords.forEach(inv => {
-             if (inv.equityAllocated && inv.equityAllocated > 0) {
+             if (inv.shares && inv.shares > 0 && calculatedTotalShares > 0) {
+                 const investorPercentage = (inv.shares / calculatedTotalShares) * 100;
+                 
+                 if (investorPercentage > 0) {
+                     distribution.push({
+                         name: `Investor (${inv.investorName})`,
+                         value: investorPercentage
+                     });
+                 }
+             } else if (inv.equityAllocated && inv.equityAllocated > 0) {
+                 // Fallback to stored equity percentage if no shares data
                  distribution.push({
                      name: `Investor (${inv.investorName})`,
                      value: inv.equityAllocated
@@ -1124,86 +1529,47 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
              }
          });
          
+         // Add ESOP equity from reserved shares
+         if (esopReservedShares > 0 && calculatedTotalShares > 0) {
+             const esopPercentage = (esopReservedShares / calculatedTotalShares) * 100;
+             
+             if (esopPercentage > 0) {
+                 distribution.push({
+                     name: 'ESOP Pool',
+                     value: esopPercentage
+                 });
+             }
+         }
+         
+         // Calculate total percentage and add "Unallocated" if needed
+         const totalPercentage = distribution.reduce((sum, item) => sum + item.value, 0);
+         const unallocatedPercentage = 100 - totalPercentage;
+         
+         if (unallocatedPercentage > 0.1) { // Only show if more than 0.1%
+             distribution.push({
+                 name: 'Unallocated',
+                 value: unallocatedPercentage
+             });
+         }
+         
          return distribution.filter(item => item.value > 0);
      })();
 
-    // Debug chart data
-    console.log('📈 Chart Data:', {
-        valuationData: valuationData.length > 0 ? valuationData : 'No valuation data',
-        equityData: equityData.length > 0 ? equityData : 'No equity data'
-    });
+    // Debug chart data (commented out for production)
+    // console.log('📈 Chart Data:', {
+    //     valuationData: valuationData.length > 0 ? valuationData : 'No valuation data',
+    //     equityData: equityData.length > 0 ? equityData : 'No equity data',
+    //     founders: founders.map(f => ({ name: f.name, shares: f.shares, equityPercentage: f.equityPercentage })),
+    //     investmentRecords: investmentRecords.map(inv => ({ name: inv.investorName, shares: inv.shares, equityAllocated: inv.equityAllocated })),
+    //     esopReservedShares: startup.esopReservedShares
+    // });
     
-    // Debug valuation history specifically
-    console.log('📊 Valuation History State:', {
-        rawValuationHistory: valuationHistory,
-        processedValuationData: valuationData,
-        hasData: valuationData.length > 0,
-        valuationHistoryLength: valuationHistory.length,
-        valuationDataLength: valuationData.length
-    });
+    // Debug logs commented out for production
+    // console.log('📊 Valuation History State:', { ... });
+    // console.log('📊 Equity Distribution State:', { ... });
     
-    // Debug equity distribution specifically
-    console.log('📊 Equity Distribution State:', {
-        rawEquityDistribution: equityDistribution,
-        processedEquityData: equityData,
-        hasData: equityData.length > 0,
-        equityDistributionLength: equityDistribution.length,
-        equityDataLength: equityData.length
-    });
-    
-    // Additional debugging for chart rendering
-    console.log('🎯 Chart Rendering Debug:', {
-        willShowValuationChart: valuationData.length > 0,
-        willShowEquityChart: equityData.length > 0,
-        valuationDataSample: valuationData.slice(0, 2),
-        equityDataSample: equityData.slice(0, 2),
-        valuationDataFull: valuationData,
-        equityDataFull: equityData
-    });
-    
-    // Debug the actual chart rendering conditions
-    console.log('📊 Chart Display Conditions:', {
-        valuationDataLength: valuationData.length,
-        equityDataLength: equityData.length,
-        valuationHistoryLength: valuationHistory.length,
-        equityDistributionLength: equityDistribution.length,
-        shouldShowValuationChart: valuationData.length > 0,
-        shouldShowEquityChart: equityData.length > 0
-    });
-    
-    // Debug exact data values
-    console.log('🔍 Exact Chart Data Values:', {
-        valuationDataValues: valuationData.map(item => ({
-            name: item.name,
-            valuation: item.valuation,
-            investment: item.investment,
-            valuationType: typeof item.valuation,
-            investmentType: typeof item.investment
-        })),
-        equityDataValues: equityData.map(item => ({
-            name: item.name,
-            value: item.value,
-            valueType: typeof item.value
-        }))
-    });
-    
-         // Debug the actual raw data that's being processed
-     console.log('🔍 Raw Data Being Processed:', {
-         valuationHistoryRaw: valuationHistory,
-         equityDistributionRaw: equityDistribution,
-         valuationHistoryFirstItem: valuationHistory[0],
-         equityDistributionFirstItem: equityDistribution[0]
-     });
-     
-     // Debug chart rendering conditions
-     console.log('🎨 Chart Rendering Status:', {
-         valuationDataLength: valuationData.length,
-         equityDataLength: equityData.length,
-         valuationDataFirstItem: valuationData[0],
-         equityDataFirstItem: equityData[0],
-         willRenderValuationChart: valuationData.length > 0,
-         willRenderEquityChart: equityData.length > 0
-     });
+    // All debug logs commented out for production
+    // Charts are ready to render based on data availability
 
     // =====================================================
     // OFFERS RECEIVED HANDLERS
@@ -1218,6 +1584,11 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
             console.log('🔍 Startup object:', startup);
             console.log('🔍 User role:', userRole);
             console.log('🔍 Is view only:', isViewOnly);
+            
+            // Fetch investment offers for this startup
+            console.log('💰 Fetching investment offers...');
+            const investmentOffers = await investmentService.getOffersForStartup(startup.id);
+            console.log('💰 Investment offers fetched:', investmentOffers);
             
             // Fetch applications for this startup with all necessary data
             const { data: applications, error } = await supabase
@@ -1298,8 +1669,24 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
             console.log('🔍 Applications with diligence_status "requested":', applications?.filter(app => app.diligence_status === 'requested'));
             console.log('🔍 Applications that will pass filter:', applications?.filter(app => app.status === 'accepted' || app.diligence_status === 'requested'));
 
+            // Transform investment offers into OfferReceived format
+            const investmentOffersFormatted: OfferReceived[] = investmentOffers.map((offer: any) => ({
+                id: `investment_${offer.id}`,
+                from: offer.investorEmail,
+                type: 'Investment' as const,
+                offerDetails: `${formatCurrency(offer.offerAmount, startupCurrency)} for ${offer.equityPercentage}% equity`,
+                status: offer.status as 'pending' | 'accepted' | 'rejected',
+                code: offer.id.toString(),
+                createdAt: offer.createdAt,
+                isInvestmentOffer: true,
+                investmentOfferId: offer.id,
+                startupScoutingFee: offer.startup_scouting_fee_paid || 0,
+                investorScoutingFee: offer.investor_scouting_fee_paid || 0,
+                contactDetailsRevealed: offer.contact_details_revealed || false
+            }));
+
             // Transform applications into offers - Show both accepted applications and pending diligence requests
-            const offers: OfferReceived[] = (applications || [])
+            const incubationOffers: OfferReceived[] = (applications || [])
                 .filter((app: any) => {
                     const passesFilter = app.status === 'accepted' || app.diligence_status === 'requested';
                     console.log(`🔍 App ${app.id}: status=${app.status}, diligence_status=${app.diligence_status}, passesFilter=${passesFilter}`);
@@ -1371,10 +1758,16 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                     return offer;
                 });
 
-            console.log('🎯 Final offers array:', offers);
-            console.log('🎯 Final offers count:', offers.length);
-            console.log('🎯 Setting offersReceived state to:', offers);
-            setOffersReceived(offers);
+            // Combine investment offers and incubation offers
+            const allOffers: OfferReceived[] = [...investmentOffersFormatted, ...incubationOffers]
+                .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+            console.log('🎯 Investment offers:', investmentOffersFormatted);
+            console.log('🎯 Incubation offers:', incubationOffers);
+            console.log('🎯 Combined offers array:', allOffers);
+            console.log('🎯 Final offers count:', allOffers.length);
+            console.log('🎯 Setting offersReceived state to:', allOffers);
+            setOffersReceived(allOffers);
             console.log('🎯 State set complete');
         } catch (err) {
             console.error('Error loading offers received:', err);
@@ -1544,6 +1937,48 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
         }
     };
 
+    const handleAcceptInvestmentOffer = async (offer: OfferReceived) => {
+        if (!offer.investmentOfferId) return;
+        
+        try {
+            console.log('💰 Accepting investment offer:', offer.investmentOfferId);
+            
+            // Use the new acceptOfferWithFee function
+            await investmentService.acceptOfferWithFee(
+                offer.investmentOfferId, 
+                'United States', // TODO: Get actual country from startup profile
+                startup.totalFunding || 0
+            );
+            
+            // Reload offers to reflect the change
+            await loadOffersReceived();
+            
+            console.log('✅ Investment offer accepted successfully with investor scouting fee');
+            alert('Investment offer accepted! Investor scouting fee has been paid. Contact details will be revealed based on investment advisor assignment.');
+        } catch (err) {
+            console.error('Error accepting investment offer:', err);
+            alert('Failed to accept investment offer. Please try again.');
+        }
+    };
+
+    const handleRejectInvestmentOffer = async (offer: OfferReceived) => {
+        if (!offer.investmentOfferId) return;
+        
+        try {
+            console.log('💰 Rejecting investment offer:', offer.investmentOfferId);
+            await investmentService.rejectOffer(offer.investmentOfferId);
+            
+            // Reload offers to reflect the change
+            await loadOffersReceived();
+            
+            console.log('✅ Investment offer rejected successfully');
+            alert('Investment offer rejected successfully.');
+        } catch (err) {
+            console.error('Error rejecting investment offer:', err);
+            alert('Failed to reject investment offer. Please try again.');
+        }
+    };
+
     if (isLoading) {
         return (
             <div className="flex items-center justify-center h-64">
@@ -1564,8 +1999,10 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
         );
     }
 
-    return (
-        <div className="space-y-6">
+    // Add error boundary to prevent crashes
+    try {
+        return (
+            <div className="space-y-6">
             {/* Summary Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                  <Card>
@@ -1576,58 +2013,91 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                                 const latest = [...investmentRecords]
                                     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
                                 const latestPost = (latest as any)?.postMoneyValuation;
-                                if (latestPost && latestPost > 0) return formatCurrency(latestPost);
+                                if (latestPost && latestPost > 0) return formatCurrency(latestPost, startupCurrency);
                             }
-                            return formatCurrency(startup.currentValuation);
+                            return formatCurrency(startup.currentValuation, startupCurrency);
                         })()}
                     </p>
                 </Card>
                                 <Card>
                     <p className="text-sm font-medium text-slate-500">Total Shares</p>
                     <div className="flex items-center gap-3">
-                        <Input 
-                            name="total-shares"
-                            id="total-shares"
-                            type="number"
-                            value={totalSharesDraft}
-                            onChange={(e) => setTotalSharesDraft(e.target.value)}
-                            onBlur={async () => {
-                                const parsed = Number(totalSharesDraft);
-                                if (!Number.isFinite(parsed) || parsed < 0) {
-                                    setTotalSharesDraft(String(totalShares));
-                                    return;
-                                }
-                                if (parsed === totalShares) return;
-                                try {
-                                    setIsSavingShares(true);
-                                    // compute price per share from current valuation if available
-                                    // Price per share uses latest post-money valuation if present
-                                    let latestValuation = startup.currentValuation || 0;
-                                    if (investmentRecords && investmentRecords.length > 0) {
-                                        const latest = [...investmentRecords]
-                                            .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0] as any;
-                                        if (latest?.postMoneyValuation && latest.postMoneyValuation > 0) {
-                                            latestValuation = latest.postMoneyValuation;
+                        <div className="flex-1">
+                            <div className="text-2xl font-bold text-slate-900">
+                                {(() => {
+                                    const totalFounderShares = founders.reduce((sum, founder) => sum + (founder.shares || 0), 0);
+                                    const totalInvestorShares = investmentRecords.reduce((sum, inv) => sum + (inv.shares || 0), 0);
+                                    const esopReservedShares = startup.esopReservedShares || 0;
+                                    const calculatedTotalShares = totalFounderShares + totalInvestorShares + esopReservedShares;
+                                    return calculatedTotalShares.toLocaleString();
+                                })()}
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1">Calculated automatically</p>
+                        </div>
+                        <div className="text-right">
+                            <p className="text-sm text-slate-500">
+                                {(() => {
+                                    const totalFounderShares = founders.reduce((sum, founder) => sum + (founder.shares || 0), 0);
+                                    const totalInvestorShares = investmentRecords.reduce((sum, inv) => sum + (inv.shares || 0), 0);
+                                    const esopReservedShares = startup.esopReservedShares || 0;
+                                    const calculatedTotalShares = totalFounderShares + totalInvestorShares + esopReservedShares;
+                                    
+                                    if (calculatedTotalShares > 0) {
+                                        let latestValuation = startup.currentValuation || 0;
+                                        if (investmentRecords && investmentRecords.length > 0) {
+                                            const latest = [...investmentRecords]
+                                                .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0] as any;
+                                            if (latest?.postMoneyValuation && latest.postMoneyValuation > 0) {
+                                                latestValuation = latest.postMoneyValuation;
+                                            }
                                         }
+                                        const computedPricePerShare = latestValuation / calculatedTotalShares;
+                                        return `Price/Share: ${formatCurrency(computedPricePerShare, startupCurrency)}`;
                                     }
-                                    const computedPricePerShare = parsed > 0 ? latestValuation / parsed : 0;
-                                    const saved = await capTableService.upsertTotalShares(startup.id, parsed, computedPricePerShare);
-                                    setTotalShares(saved);
-                                    setPricePerShare(computedPricePerShare);
-                                } catch (err) {
-                                    console.error('Failed to save total shares', err);
-                                    setTotalSharesDraft(String(totalShares));
-                                } finally {
-                                    setIsSavingShares(false);
-                                }
-                            }}
-                        />
-                        {isSavingShares && <Loader2 className="h-5 w-5 animate-spin text-slate-400" />}
-                        <Button size="sm" variant="outline" onClick={() => setIsSharesModalOpen(true)}>Edit</Button>
+                                    return 'Price/Share: —';
+                                })()}
+                            </p>
+                        </div>
                     </div>
-                    <p className="text-sm text-slate-500 mt-1">
-                        {pricePerShare > 0 ? `(Price/Share: ${formatCurrency(pricePerShare)})` : '(Price/Share: —)'}
-                     </p>
+                     
+                     {/* Shares Allocation Summary */}
+                     {(() => {
+                         const totalFounderShares = founders.reduce((sum, founder) => sum + (founder.shares || 0), 0);
+                         const totalInvestorShares = investmentRecords.reduce((sum, inv) => sum + (inv.shares || 0), 0);
+                         const esopReservedShares = startup.esopReservedShares || 0;
+                         const calculatedTotalShares = totalFounderShares + totalInvestorShares + esopReservedShares;
+                         
+                         if (calculatedTotalShares > 0) {
+                             return (
+                                 <div className="mt-3 pt-3 border-t border-slate-200">
+                                     <p className="text-xs font-medium text-slate-600 mb-2">Shares Allocation</p>
+                                     <div className="space-y-1 text-xs">
+                                         <div className="flex justify-between">
+                                             <span className="text-slate-500">Founders:</span>
+                                             <span className="text-slate-700">
+                                                 {totalFounderShares.toLocaleString()}
+                                             </span>
+                                         </div>
+                                         <div className="flex justify-between">
+                                             <span className="text-slate-500">Investors:</span>
+                                             <span className="text-slate-700">{totalInvestorShares.toLocaleString()}</span>
+                                         </div>
+                                         <div className="flex justify-between">
+                                             <span className="text-slate-500">ESOP Reserved:</span>
+                                             <span className="text-slate-700">{esopReservedShares.toLocaleString()}</span>
+                                         </div>
+                                         <div className="flex justify-between font-medium pt-1 border-t border-slate-100">
+                                             <span className="text-slate-600">Total:</span>
+                                             <span className="text-slate-900 font-bold">
+                                                 {calculatedTotalShares.toLocaleString()}
+                                             </span>
+                                         </div>
+                                     </div>
+                                 </div>
+                             );
+                         }
+                         return null;
+                     })()}
                  </Card>
                                  <Card>
                      <p className="text-sm font-medium text-slate-500">Total Funding</p>
@@ -1636,7 +2106,7 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                             const totalEquity = investmentRecords.filter(inv => inv.investmentType === InvestmentRoundType.Equity).reduce((sum, inv) => sum + (inv.amount || 0), 0);
                             const totalDebt = investmentRecords.filter(inv => inv.investmentType === InvestmentRoundType. Debt).reduce((sum, inv) => sum + (inv.amount || 0), 0);
                             const totalGrant = investmentRecords.filter(inv => inv.investmentType === InvestmentRoundType.Grant).reduce((sum, inv) => sum + (inv.amount || 0), 0);
-                            return formatCurrency(totalEquity + totalDebt + totalGrant);
+                            return formatCurrency(totalEquity + totalDebt + totalGrant, startupCurrency);
                         })()}
                      </p>
                  </Card>
@@ -1648,19 +2118,75 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                  </Card>
                  <Card>
                      <p className="text-sm font-medium text-slate-500">Total Equity Funding</p>
-                    <p className="text-xl font-bold">{formatCurrencyCompact(investmentRecords.filter(inv => inv.investmentType === InvestmentRoundType.Equity).reduce((sum, inv) => sum + (inv.amount || 0), 0))}</p>
+                    <p className="text-xl font-bold">{formatCurrencyCompactLocal(investmentRecords.filter(inv => inv.investmentType === InvestmentRoundType.Equity).reduce((sum, inv) => sum + (inv.amount || 0), 0), startupCurrency)}</p>
                  </Card>
                  <Card>
                     <p className="text-sm font-medium text-slate-500">Total Debt Funding</p>
-                    <p className="text-xl font-bold">{formatCurrencyCompact(investmentRecords.filter(inv => inv.investmentType === InvestmentRoundType.Debt).reduce((sum, inv) => sum + (inv.amount || 0), 0))}</p>
+                    <p className="text-xl font-bold">{formatCurrencyCompactLocal(investmentRecords.filter(inv => inv.investmentType === InvestmentRoundType.Debt).reduce((sum, inv) => sum + (inv.amount || 0), 0), startupCurrency)}</p>
                  </Card>
                  <Card>
                     <p className="text-sm font-medium text-slate-500">Total Grant Funding</p>
-                    <p className="text-xl font-bold">{formatCurrencyCompact(investmentRecords.filter(inv => inv.investmentType === InvestmentRoundType.Grant).reduce((sum, inv) => sum + (inv.amount || 0), 0))}</p>
+                    <p className="text-xl font-bold">{formatCurrencyCompactLocal(investmentRecords.filter(inv => inv.investmentType === InvestmentRoundType.Grant).reduce((sum, inv) => sum + (inv.amount || 0), 0), startupCurrency)}</p>
                  </Card>
             </div>
 
-            
+
+            {/* Startup Profile Information from Second Stage Registration */}
+            {startupProfileData && (
+                <Card>
+                    <div className="flex items-center gap-2 mb-4">
+                        <Users className="w-5 h-5 text-blue-600" />
+                        <h3 className="text-lg font-semibold text-slate-700">Company Information</h3>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {startupProfileData.country_of_registration && (
+                            <div className="p-3 bg-slate-50 rounded-lg">
+                                <h4 className="font-medium text-slate-900">Country of Registration</h4>
+                                <p className="text-sm text-slate-600">{startupProfileData.country_of_registration}</p>
+                            </div>
+                        )}
+                        
+                        {startupProfileData.company_type && (
+                            <div className="p-3 bg-slate-50 rounded-lg">
+                                <h4 className="font-medium text-slate-900">Company Type</h4>
+                                <p className="text-sm text-slate-600">{startupProfileData.company_type}</p>
+                            </div>
+                        )}
+                        
+                        {startupProfileData.registration_date && (
+                            <div className="p-3 bg-slate-50 rounded-lg">
+                                <h4 className="font-medium text-slate-900">Registration Date</h4>
+                                <p className="text-sm text-slate-600">
+                                    {new Date(startupProfileData.registration_date).toLocaleDateString()}
+                                </p>
+                            </div>
+                        )}
+                        
+                        {startupProfileData.currency && (
+                            <div className="p-3 bg-slate-50 rounded-lg">
+                                <h4 className="font-medium text-slate-900">Currency</h4>
+                                <p className="text-sm text-slate-600">{startupProfileData.currency}</p>
+                            </div>
+                        )}
+                        
+                        {startupProfileData.total_shares && (
+                            <div className="p-3 bg-slate-50 rounded-lg">
+                                <h4 className="font-medium text-slate-900">Total Shares (Profile)</h4>
+                                <p className="text-sm text-slate-600">{startupProfileData.total_shares.toLocaleString()}</p>
+                            </div>
+                        )}
+                        
+                        {startupProfileData.price_per_share && (
+                            <div className="p-3 bg-slate-50 rounded-lg">
+                                <h4 className="font-medium text-slate-900">Price Per Share (Profile)</h4>
+                                <p className="text-sm text-slate-600">
+                                    {formatCurrency(startupProfileData.price_per_share, startupProfileData.currency || startupCurrency)}
+                                </p>
+                            </div>
+                        )}
+                    </div>
+                </Card>
+            )}
 
             {/* Charts & Founder Info */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1692,9 +2218,9 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                                      <BarChart data={valuationData}>
                                          <CartesianGrid strokeDasharray="3 3" />
                                          <XAxis dataKey="name" fontSize={12} />
-                                         <YAxis yAxisId="left" orientation="left" stroke="#16a34a" fontSize={12} tickFormatter={(val) => formatCurrencyCompact(val)}/>
-                                         <YAxis yAxisId="right" orientation="right" stroke="#3b82f6" fontSize={12} tickFormatter={(val) => formatCurrencyCompact(val)}/>
-                                         <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                                         <YAxis yAxisId="left" orientation="left" stroke="#16a34a" fontSize={12} tickFormatter={(val) => formatCurrencyCompact(val, startupCurrency)}/>
+                                         <YAxis yAxisId="right" orientation="right" stroke="#3b82f6" fontSize={12} tickFormatter={(val) => formatCurrencyCompact(val, startupCurrency)}/>
+                                         <Tooltip formatter={(value: number) => formatCurrency(value, startupCurrency)} />
                                          <Legend />
                                          <Bar yAxisId="left" dataKey="valuation" fill="#16a34a" name="Valuation" />
                                          <Bar yAxisId="right" dataKey="investment" fill="#3b82f6" name="Investment" />
@@ -1736,6 +2262,17 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                                  <PieChartIcon className="h-4 w-4" />
                              </Button>
                          </div>
+                         
+                         {/* Equity Calculation Warning */}
+                         {(() => {
+                             const totalFounderShares = founders.reduce((sum, founder) => sum + (founder.shares || 0), 0);
+                             const totalInvestorShares = investmentRecords.reduce((sum, inv) => sum + (inv.shares || 0), 0);
+                             const esopReservedShares = startup.esopReservedShares || 0;
+                             const totalAllocatedShares = totalFounderShares + totalInvestorShares + esopReservedShares;
+                             // No over-allocation warning needed since total shares are calculated automatically
+                             return null;
+                         })()}
+                         
                          {equityData.length > 0 ? (
                              <div style={{ width: '100%', height: 300 }}>
                                  <ResponsiveContainer width="100%" height="100%">
@@ -1770,9 +2307,66 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                         <div className="space-y-4">
                             {founders && founders.length > 0 ? (
                                 founders.map((founder, index) => (
-                                    <div key={index}>
-                                        <p className="font-semibold">{founder.name}</p>
-                                        <p className="text-sm text-slate-500">{founder.email}</p>
+                                    <div key={index} className="border-b border-slate-200 pb-3 last:border-b-0">
+                                        <div className="flex justify-between items-start">
+                                            <div>
+                                                <p className="font-semibold">{founder.name}</p>
+                                                <p className="text-sm text-slate-500">{founder.email}</p>
+                                            </div>
+                                            <div className="text-right">
+                                                {(() => {
+                                                    // Calculate actual equity percentage based on shares
+                                                    const totalFounderShares = founders.reduce((sum, f) => sum + (f.shares || 0), 0);
+                                                    const totalInvestorShares = investmentRecords.reduce((sum, inv) => sum + (inv.shares || 0), 0);
+                                                    const esopReservedShares = startup.esopReservedShares || 0;
+                                                    const calculatedTotalShares = totalFounderShares + totalInvestorShares + esopReservedShares;
+                                                    
+                                                    console.log('🔍 Founder equity check:', {
+                                                        name: founder.name,
+                                                        equityPercentage: founder.equityPercentage,
+                                                        equityType: typeof founder.equityPercentage,
+                                                        shares: founder.shares,
+                                                        sharesType: typeof founder.shares,
+                                                        calculatedTotalShares: calculatedTotalShares
+                                                    });
+                                                    
+                                                    const actualEquityPercentage = founder.shares && calculatedTotalShares > 0 
+                                                        ? (founder.shares / calculatedTotalShares) * 100 
+                                                        : (founder.equityPercentage || 0);
+                                                    
+                                                    if (founder.shares && founder.shares > 0) {
+                                                        return (
+                                                            <div>
+                                                                <p className="text-sm font-medium text-slate-700">
+                                                                    {actualEquityPercentage.toFixed(1)}% Equity
+                                                                </p>
+                                                                <p className="text-xs text-slate-500">
+                                                                    {founder.shares.toLocaleString()} shares
+                                                                </p>
+                                                                {actualEquityPercentage > 100 && (
+                                                                    <p className="text-xs text-red-500 font-medium">
+                                                                        ⚠️ Exceeds total shares
+                                                                    </p>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    } else if (founder.equityPercentage && founder.equityPercentage > 0) {
+                                                        return (
+                                                            <div>
+                                                                <p className="text-sm font-medium text-slate-700">
+                                                                    {founder.equityPercentage.toFixed(1)}% Equity
+                                                                </p>
+                                                                <p className="text-xs text-slate-500">
+                                                                    No shares specified
+                                                                </p>
+                                                            </div>
+                                                        );
+                                                    } else {
+                                                        return <p className="text-sm text-slate-400">No equity data</p>;
+                                                    }
+                                                })()}
+                                            </div>
+                                        </div>
                                     </div>
                                 ))
                             ) : (
@@ -1826,7 +2420,7 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                                              </div>
                                              <div>
                                                  <p className="font-medium text-slate-700">Target Value</p>
-                                                 <p className="text-slate-600">{formatCurrency(fundraising.value)}</p>
+                                                 <p className="text-slate-600">{formatCurrency(fundraising.value, startupCurrency)}</p>
                                              </div>
                                              <div>
                                                  <p className="font-medium text-slate-700">Equity Offered</p>
@@ -1946,6 +2540,7 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">From</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Type</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Offer Details</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Scouting Fees</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Actions / Status</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Code</th>
                             </tr>
@@ -1961,6 +2556,16 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                                     </td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
                                         {offer.offerDetails}
+                                    </td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                                        {offer.type === 'Investment' ? (
+                                            <div className="text-xs">
+                                                <div>Startup: {formatCurrency(offer.startupScoutingFee || 0)}</div>
+                                                <div>Investor: {formatCurrency(offer.investorScoutingFee || 0)}</div>
+                                            </div>
+                                        ) : (
+                                            <span className="text-slate-400">N/A</span>
+                                        )}
                                     </td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                                         {offer.type === 'Incubation' && offer.status === 'accepted' && offer.agreementUrl && (
@@ -1998,6 +2603,39 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                                                 Accepted
                                             </span>
                                         )}
+                                        {offer.type === 'Investment' && (offer.status === 'pending' || offer.status === 'startup_advisor_approved') && (
+                                            <div className="flex gap-2">
+                                                <Button
+                                                    size="sm"
+                                                    onClick={() => handleAcceptInvestmentOffer(offer)}
+                                                    className="bg-green-600 hover:bg-green-700 text-white"
+                                                >
+                                                    <Check className="h-4 w-4 mr-1" />
+                                                    Accept
+                                                </Button>
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    onClick={() => handleRejectInvestmentOffer(offer)}
+                                                    className="border-red-300 text-red-600 hover:bg-red-50"
+                                                >
+                                                    <X className="h-4 w-4 mr-1" />
+                                                    Reject
+                                                </Button>
+                                            </div>
+                                        )}
+                                        {offer.type === 'Investment' && offer.status === 'accepted' && (
+                                            <span className="text-green-600 flex items-center gap-1">
+                                                <Check className="h-4 w-4" />
+                                                Accepted
+                                            </span>
+                                        )}
+                                        {offer.type === 'Investment' && offer.status === 'rejected' && (
+                                            <span className="text-red-600 flex items-center gap-1">
+                                                <X className="h-4 w-4" />
+                                                Rejected
+                                            </span>
+                                        )}
                                     </td>
                                     <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
                                         {offer.code}
@@ -2006,7 +2644,7 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                             ))}
                             {offersReceived.length === 0 && (
                                 <tr>
-                                    <td colSpan={5} className="px-6 py-8 text-center text-slate-500">
+                                    <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
                                         {isViewOnly ? (
                                             <div className="space-y-2">
                                                 <p className="text-sm">No offers or opportunities received yet.</p>
@@ -2043,6 +2681,26 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                                 onChange={e => handleFounderChange(founder.id, 'email', e.target.value)}
                                 required
                             />
+                            <Input 
+                                label={`Equity Percentage (%)`}
+                                id={`founder-equity-${founder.id}`}
+                                type="number"
+                                step="0.1"
+                                min="0"
+                                max="100"
+                                value={founder.equityPercentage || ''}
+                                onChange={e => handleFounderChange(founder.id, 'equityPercentage', e.target.value)}
+                                placeholder="e.g., 25.5"
+                            />
+                            <Input 
+                                label={`Shares`}
+                                id={`founder-shares-${founder.id}`}
+                                type="number"
+                                min="0"
+                                value={founder.shares || ''}
+                                onChange={e => handleFounderChange(founder.id, 'shares', e.target.value)}
+                                placeholder="e.g., 1000000"
+                            />
                             {editingFounders.length > 1 && (
                                 <Button 
                                     type="button" 
@@ -2061,6 +2719,44 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                         <UserPlus className="h-4 w-4 mr-2" />
                         Add Another Founder
                     </Button>
+                    
+                    {/* Shares Allocation Summary */}
+                    {editingFounders.length > 0 && (
+                        <div className="mt-4 p-4 bg-slate-50 rounded-lg border">
+                            <h4 className="text-sm font-medium text-slate-700 mb-3">Shares Allocation Summary</h4>
+                            {(() => {
+                                const totalFounderShares = editingFounders.reduce((sum, founder) => sum + (founder.shares || 0), 0);
+                                const totalInvestorShares = investmentRecords.reduce((sum, inv) => sum + (inv.shares || 0), 0);
+                                const esopReservedShares = startup.esopReservedShares || 0;
+                                const calculatedTotalShares = totalFounderShares + totalInvestorShares + esopReservedShares;
+                                
+                                return (
+                                    <div className="space-y-2 text-sm">
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-600">Founder Shares:</span>
+                                            <span className="text-slate-700">
+                                                {totalFounderShares.toLocaleString()}
+                                            </span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-600">Investor Shares:</span>
+                                            <span className="text-slate-700">{totalInvestorShares.toLocaleString()}</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <span className="text-slate-600">ESOP Reserved:</span>
+                                            <span className="text-slate-700">{esopReservedShares.toLocaleString()}</span>
+                                        </div>
+                                        <div className="flex justify-between font-medium pt-2 border-t border-slate-200">
+                                            <span className="text-slate-600">Total Shares:</span>
+                                            <span className="text-slate-900 font-bold">
+                                                {calculatedTotalShares.toLocaleString()}
+                                            </span>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+                        </div>
+                    )}
                 </div>
                 <div className="flex justify-end gap-3 pt-6 border-t mt-4">
                     <Button type="button" variant="secondary" onClick={() => setIsFounderModalOpen(false)}>Cancel</Button>
@@ -2130,7 +2826,20 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
 
             {/* Investor List */}
             <Card>
-                <h3 className="text-lg font-semibold mb-4 text-slate-700">Investor List</h3>
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-lg font-semibold text-slate-700">Investor List</h3>
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={handleDownloadFundUtilizationReport}
+                        className="flex items-center gap-2"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        Download Fund Utilization Report (PDF)
+                    </Button>
+                </div>
                 <div className="overflow-x-auto">
                     <table className="min-w-full divide-y divide-slate-200 text-sm">
                         <thead className="bg-slate-50">
@@ -2140,6 +2849,7 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                                 <th className="px-4 py-2 text-left font-medium text-slate-500">Amount</th>
                                 <th className="px-4 py-2 text-left font-medium text-slate-500">Equity</th>
                                 <th className="px-4 py-2 text-left font-medium text-slate-500">Post-Money</th>
+                                <th className="px-4 py-2 text-left font-medium text-slate-500">Fund Utilization</th>
                                 <th className="px-4 py-2 text-right font-medium text-slate-500">Actions</th>
                             </tr>
                         </thead>
@@ -2156,12 +2866,42 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                                                 <span className="text-slate-400">No code</span>
                                             )}
                                         </td>
-                                        <td className="px-4 py-2 text-slate-500">{formatCurrency(inv.amount)}</td>
+                                        <td className="px-4 py-2 text-slate-500">{formatCurrency(inv.amount, startupCurrency)}</td>
                                         <td className="px-4 py-2 text-slate-500">{inv.equityAllocated}%</td>
-                                        <td className="px-4 py-2 text-slate-500">{formatCurrency(inv.postMoneyValuation || ((inv.equityAllocated && inv.equityAllocated > 0) ? (inv.amount * 100) / inv.equityAllocated : 0))}</td>
+                                        <td className="px-4 py-2 text-slate-500">{formatCurrency(inv.postMoneyValuation || ((inv.equityAllocated && inv.equityAllocated > 0) ? (inv.amount * 100) / inv.equityAllocated : 0), startupCurrency)}</td>
+                                        <td className="px-4 py-2 text-slate-500">
+                                            {(() => {
+                                                const utilization = calculateInvestorUtilization(inv.investorName, inv.amount);
+                                                return (
+                                                    <UtilizationProgressBar 
+                                                        utilized={utilization.utilized} 
+                                                        total={inv.amount} 
+                                                        percentage={utilization.percentage} 
+                                                    />
+                                                );
+                                            })()}
+                                        </td>
                                         <td className="px-4 py-2 text-right">
                                             <div className="flex items-center justify-end gap-2">
-                                                <Button size="sm" variant="outline" disabled={!canEdit}><Edit3 className="h-4 w-4" /></Button>
+                                                <Button 
+                                                    size="sm" 
+                                                    variant="outline" 
+                                                    onClick={() => handleDownloadIndividualFundReport(inv)}
+                                                    className="text-blue-600 border-blue-300 hover:bg-blue-50"
+                                                    title="Download Fund Utilization Report (PDF)"
+                                                >
+                                                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                                    </svg>
+                                                </Button>
+                                                <Button 
+                                                    size="sm" 
+                                                    variant="outline" 
+                                                    disabled={!canEdit}
+                                                    onClick={() => handleEditInvestment(inv)}
+                                                >
+                                                    <Edit3 className="h-4 w-4" />
+                                                </Button>
                                                 {canEdit && (
                                                     <Button 
                                                         size="sm" 
@@ -2180,7 +2920,7 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                                     </tr>
                             ))}
                             {investmentRecords.length === 0 && (
-                                <tr><td colSpan={6} className="text-center py-6 text-slate-500">No investments added yet.</td></tr>
+                                <tr><td colSpan={7} className="text-center py-6 text-slate-500">No investments added yet.</td></tr>
                             )}
                         </tbody>
                     </table>
@@ -2219,7 +2959,14 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                                         </span>
                                         </td>
                                         <td className="px-4 py-2 text-right">
-                                        <Button size="sm" variant="outline" disabled={!canEdit}><Edit3 className="h-4 w-4" /></Button>
+                                        <Button 
+                                            size="sm" 
+                                            variant="outline" 
+                                            disabled={!canEdit}
+                                            onClick={() => handleEditIncubationProgram(program)}
+                                        >
+                                            <Edit3 className="h-4 w-4" />
+                                        </Button>
                                         </td>
                                     </tr>
                             ))}
@@ -2243,16 +2990,87 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
             {/* Add Entry Form (Unified) */}
             <Card>
                 <h3 className="text-lg font-semibold mb-4 text-slate-700">Add New Entry to Cap Table</h3>
+                {error && (
+                    <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded">
+                        <div className="flex items-center">
+                            <span className="text-red-500 mr-2">⚠️</span>
+                            <div>
+                                <p className="font-medium">Form Error</p>
+                                <p className="text-sm">{error}</p>
+                            </div>
+                        </div>
+                    </div>
+                )}
                 <fieldset disabled={!canEdit}>
                     <form onSubmit={handleEntrySubmit} className="space-y-4">
-                        <Select label="Entry Type" id="entry-type" value={entryType} onChange={e => setEntryType(e.target.value as 'investment' | 'recognition')}>
-                            <option value="investment">Investment</option>
-                            <option value="recognition">Recognition / Incubation</option>
-                        </Select>
+                        <div className="space-y-2">
+                            <label className="block text-sm font-medium text-slate-700">Entry Type</label>
+                            <div className="flex gap-2">
+                                <Button
+                                    type="button"
+                                    variant={entryType === 'investment' ? 'default' : 'outline'}
+                                    onClick={() => setEntryType('investment')}
+                                    className={`flex-1 border-2 ${entryType === 'investment' ? 'border-blue-600' : 'border-slate-300'}`}
+                                >
+                                    Investment
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant={entryType === 'recognition' ? 'default' : 'outline'}
+                                    onClick={() => setEntryType('recognition')}
+                                    className={`flex-1 border-2 ${entryType === 'recognition' ? 'border-blue-600' : 'border-slate-300'}`}
+                                >
+                                    Recognition / Incubation
+                                </Button>
+                            </div>
+                        </div>
 
                         {entryType === 'investment' && (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pt-4 border-t">
-                                <Input label="Date" name="inv-date" id="inv-date" type="date" required />
+                            <div className="space-y-4 pt-4 border-t">
+                                {/* Shares Allocation Summary */}
+                                {(() => {
+                                    const totalFounderShares = founders.reduce((sum, founder) => sum + (founder.shares || 0), 0);
+                                    const totalInvestorShares = investmentRecords.reduce((sum, inv) => sum + (inv.shares || 0), 0);
+                                    const esopReservedShares = startup.esopReservedShares || 0;
+                                    const calculatedTotalShares = totalFounderShares + totalInvestorShares + esopReservedShares;
+                                    
+                                    if (calculatedTotalShares > 0) {
+                                        return (
+                                            <div className="p-3 bg-slate-50 rounded-lg border">
+                                                <h4 className="text-sm font-medium text-slate-700 mb-2">Shares Allocation Summary</h4>
+                                                <div className="space-y-1 text-sm">
+                                                    <div className="flex justify-between">
+                                                        <span>Total Shares:</span>
+                                                        <span className="font-medium">{calculatedTotalShares.toLocaleString()}</span>
+                                                    </div>
+                                                    <div className="flex justify-between">
+                                                        <span>Founder Shares:</span>
+                                                        <span>{totalFounderShares.toLocaleString()}</span>
+                                                    </div>
+                                                    <div className="flex justify-between">
+                                                        <span>Investor Shares:</span>
+                                                        <span>{totalInvestorShares.toLocaleString()}</span>
+                                                    </div>
+                                                    <div className="flex justify-between">
+                                                        <span>ESOP Reserved:</span>
+                                                        <span>{esopReservedShares.toLocaleString()}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    }
+                                    return null;
+                                })()}
+                                
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                                <Input 
+                                    label="Investment Date" 
+                                    name="inv-date" 
+                                    id="inv-date" 
+                                    type="date" 
+                                    max={new Date().toISOString().split('T')[0]}
+                                    required 
+                                />
                                 <Select label="Investor Type" name="inv-investor-type" id="inv-investor-type" required>
                                     {Object.values(InvestorType).map(t => <option key={t} value={t}>{t}</option>)}
                                 </Select>
@@ -2261,10 +3079,32 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                                 </Select>
                                 <Input label="Investor Name" name="inv-name" id="inv-name" required />
                                 <Input label="Investor Code" name="inv-code" id="inv-code" placeholder="e.g., INV-A7B3C9"/>
-                                <Input label="Investment Amount" name="inv-amount" id="inv-amount" type="number" required value={invAmountDraft} onChange={(e) => setInvAmountDraft(e.target.value)} />
-                                <Input label="Equity Allocated (%)" name="inv-equity" id="inv-equity" type="number" required value={invEquityDraft} onChange={(e) => setInvEquityDraft(e.target.value)} />
+                                <Input 
+                                    label="Number of Shares" 
+                                    name="inv-shares" 
+                                    id="inv-shares" 
+                                    type="number" 
+                                    required 
+                                    value={invSharesDraft} 
+                                    onChange={(e) => setInvSharesDraft(e.target.value)}
+                                    placeholder="e.g., 10000"
+                                />
+                                <Input 
+                                    label={`Price per Share (${startupCurrency})`} 
+                                    name="inv-price-per-share" 
+                                    id="inv-price-per-share" 
+                                    type="number" 
+                                    step="0.01"
+                                    required 
+                                    value={invPricePerShareDraft} 
+                                    onChange={(e) => setInvPricePerShareDraft(e.target.value)}
+                                    placeholder="e.g., 1.50"
+                                />
+                                <Input label="Investment Amount (auto)" name="inv-amount" id="inv-amount" type="number" readOnly value={invAmountDraft} />
+                                <Input label="Equity Allocated (%) (auto)" name="inv-equity" id="inv-equity" type="number" readOnly value={invEquityDraft} />
                                 <Input label="Post-Money Valuation (auto)" name="inv-postmoney" id="inv-postmoney" type="number" readOnly value={invPostMoneyDraft} />
                                 <Input label="Proof of Investment" name="inv-proof" id="inv-proof" type="file" />
+                                </div>
                             </div>
                         )}
 
@@ -2299,70 +3139,6 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                 </fieldset>
             </Card>
 
-            {/* Incubation & Acceleration Programs */}
-            {/* Add New Program Form */}
-            {canEdit && (
-                <Card>
-                    <h3 className="text-lg font-semibold mb-4 text-slate-700">Add New Program</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        <Select 
-                            label="Program" 
-                            id="program-name" 
-                            value={newProgram.programName} 
-                            onChange={e => handleProgramNameChange(e.target.value)}
-                        >
-                            <option value="">Select a program</option>
-                            {popularPrograms.map(program => (
-                                <option key={program} value={program}>{program}</option>
-                            ))}
-                            <option value="custom">Custom Program</option>
-                        </Select>
-                        <Select 
-                            label="Type" 
-                            id="program-type" 
-                            value={newProgram.programType} 
-                            onChange={e => handleProgramTypeChange(e.target.value as any)}
-                        >
-                            <option value="Acceleration">Acceleration</option>
-                            <option value="Incubation">Incubation</option>
-                            <option value="Mentorship">Mentorship</option>
-                            <option value="Bootcamp">Bootcamp</option>
-                        </Select>
-                        <Input 
-                            label="Start Date" 
-                            id="program-start-date" 
-                            type="date" 
-                            value={newProgram.startDate} 
-                            onChange={e => setNewProgram({...newProgram, startDate: e.target.value})} 
-                        />
-                        <Input 
-                            label="End Date" 
-                            id="program-end-date" 
-                            type="date" 
-                            value={newProgram.endDate} 
-                            onChange={e => setNewProgram({...newProgram, endDate: e.target.value})} 
-                        />
-                        <Input 
-                            label="Mentor Name" 
-                            id="program-mentor" 
-                            value={newProgram.mentorName} 
-                            onChange={e => setNewProgram({...newProgram, mentorName: e.target.value})} 
-                            placeholder="Optional"
-                        />
-                        <Input 
-                            label="Mentor Email" 
-                            id="program-mentor-email" 
-                            type="email" 
-                            value={newProgram.mentorEmail} 
-                            onChange={e => setNewProgram({...newProgram, mentorEmail: e.target.value})} 
-                            placeholder="Optional"
-                        />
-                        <div className="flex items-end col-span-full">
-                            <Button onClick={handleAddProgram}>Add Program</Button>
-                        </div>
-                    </div>
-                </Card>
-            )}
 
             {/* Delete Program Confirmation Modal */}
             <Modal 
@@ -2391,63 +3167,260 @@ const CapTableTab: React.FC<CapTableTabProps> = ({ startup, userRole, user, onAc
                     </div>
                 </div>
             </Modal>
-            {/* Total Shares Modal */}
-            <SimpleModal 
-                isOpen={isSharesModalOpen}
-                title="Update Total Shares"
-                onClose={() => setIsSharesModalOpen(false)}
-                footer={
-                    <>
-                        <Button type="button" variant="outline" onClick={() => setIsSharesModalOpen(false)}>Cancel</Button>
-                        <Button 
-                            type="button"
-                            onClick={async () => {
-                                const parsed = Number(totalSharesDraft);
-                                if (!Number.isFinite(parsed) || parsed < 0) {
-                                    setError('Please enter a valid non-negative number');
-                                    return;
-                                }
-                                try {
-                                    setIsSavingShares(true);
-                                    let latestValuation = startup.currentValuation || 0;
-                                    if (investmentRecords && investmentRecords.length > 0) {
-                                        const latest = [...investmentRecords]
-                                            .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0] as any;
-                                        if (latest?.postMoneyValuation && latest.postMoneyValuation > 0) {
-                                            latestValuation = latest.postMoneyValuation;
-                                        }
-                                    }
-                                    const computedPricePerShare = parsed > 0 ? latestValuation / parsed : 0;
-                                    const saved = await capTableService.upsertTotalShares(startup.id, parsed, computedPricePerShare);
-                                    setTotalShares(saved);
-                                    setPricePerShare(computedPricePerShare);
-                                    setIsSharesModalOpen(false);
-                                } catch (err) {
-                                    console.error('Failed to save total shares', err);
-                                } finally {
-                                    setIsSavingShares(false);
-                                }
-                            }}
-                        >
-                            Save
-                        </Button>
-                    </>
-                }
+            {/* Total Shares Modal removed - total shares are now calculated automatically */}
+
+            {/* Edit Investment Modal */}
+            <Modal 
+                isOpen={isEditInvestmentModalOpen} 
+                onClose={() => setIsEditInvestmentModalOpen(false)} 
+                title="Edit Investment"
             >
-                <div style={{ display: 'grid', gap: 8 }}>
-                    <label htmlFor="modal-total-shares" style={{ fontSize: 12, color: '#475569' }}>Total Shares</label>
-                    <input 
-                        id="modal-total-shares"
-                        type="number"
-                        value={totalSharesDraft}
-                        onChange={(e) => setTotalSharesDraft(e.target.value)}
-                        style={{ padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: 6 }}
-                    />
-                </div>
-            </SimpleModal>
+                {editingInvestment && (
+                    <div className="space-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                            {/* Date */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Investment Date
+                                </label>
+                                <input
+                                    type="date"
+                                    value={editingInvestment.investmentDate}
+                                    onChange={(e) => setEditingInvestment({
+                                        ...editingInvestment,
+                                        investmentDate: e.target.value
+                                    })}
+                                    max={new Date().toISOString().split('T')[0]}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    required
+                                />
+                            </div>
+
+                            {/* Investor Type */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Investor Type
+                                </label>
+                                <select
+                                    value={editingInvestment.investorType || 'Individual'}
+                                    onChange={(e) => setEditingInvestment({
+                                        ...editingInvestment,
+                                        investorType: e.target.value as InvestorType
+                                    })}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    required
+                                >
+                                    {Object.values(InvestorType).map(t => (
+                                        <option key={t} value={t}>{t}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {/* Investment Type */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Investment Type
+                                </label>
+                                <select
+                                    value={editingInvestment.investmentType}
+                                    onChange={(e) => setEditingInvestment({
+                                        ...editingInvestment,
+                                        investmentType: e.target.value as InvestmentRoundType
+                                    })}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    required
+                                >
+                                    {Object.values(InvestmentRoundType).map(t => (
+                                        <option key={t} value={t}>{t}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            {/* Investor Name */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Investor Name
+                                </label>
+                                <input
+                                    type="text"
+                                    value={editingInvestment.investorName}
+                                    onChange={(e) => setEditingInvestment({
+                                        ...editingInvestment,
+                                        investorName: e.target.value
+                                    })}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    required
+                                />
+                            </div>
+
+                            {/* Investor Code */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Investor Code
+                                </label>
+                                <input
+                                    type="text"
+                                    value={editingInvestment.investorCode || ''}
+                                    onChange={(e) => setEditingInvestment({
+                                        ...editingInvestment,
+                                        investorCode: e.target.value
+                                    })}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    placeholder="e.g., INV-A7B3C9"
+                                />
+                            </div>
+
+                            {/* Number of Shares */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Number of Shares
+                                </label>
+                                <input
+                                    type="number"
+                                    value={editingInvestment.shares || 0}
+                                    onChange={(e) => setEditingInvestment({
+                                        ...editingInvestment,
+                                        shares: parseInt(e.target.value) || 0
+                                    })}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    placeholder="e.g., 10000"
+                                    required
+                                />
+                            </div>
+
+                            {/* Price per Share */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Price per Share ({startupCurrency})
+                                </label>
+                                <input
+                                    type="number"
+                                    step="0.01"
+                                    value={editingInvestment.pricePerShare || 0}
+                                    onChange={(e) => setEditingInvestment({
+                                        ...editingInvestment,
+                                        pricePerShare: parseFloat(e.target.value) || 0
+                                    })}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    placeholder="e.g., 1.50"
+                                    required
+                                />
+                            </div>
+
+                            {/* Investment Amount (auto-calculated) */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Investment Amount (auto)
+                                </label>
+                                <input
+                                    type="number"
+                                    value={((editingInvestment.shares || 0) * (editingInvestment.pricePerShare || 0)).toFixed(2)}
+                                    readOnly
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50 text-gray-600"
+                                />
+                            </div>
+
+                            {/* Equity Allocated (auto-calculated) */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Equity Allocated (%) (auto)
+                                </label>
+                                <input
+                                    type="number"
+                                    value={editingInvestment.equityAllocated || 0}
+                                    readOnly
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50 text-gray-600"
+                                />
+                            </div>
+
+                            {/* Post-Money Valuation (auto-calculated) */}
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Post-Money Valuation (auto)
+                                </label>
+                                <input
+                                    type="number"
+                                    value={editingInvestment.postMoneyValuation || 0}
+                                    readOnly
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-50 text-gray-600"
+                                />
+                            </div>
+
+                            {/* Proof of Investment */}
+                            <div className="md:col-span-2">
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Proof of Investment
+                                </label>
+                                <input
+                                    type="file"
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                                />
+                                {editingInvestment.proofOfInvestment && (
+                                    <p className="text-sm text-gray-500 mt-1">
+                                        Current file: {editingInvestment.proofOfInvestment}
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Notes */}
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                Notes
+                            </label>
+                            <textarea
+                                value={editingInvestment.notes || ''}
+                                onChange={(e) => setEditingInvestment({
+                                    ...editingInvestment,
+                                    notes: e.target.value
+                                })}
+                                rows={3}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                placeholder="Additional notes about this investment..."
+                            />
+                        </div>
+
+                        <div className="flex justify-end gap-3 pt-4 border-t">
+                            <Button
+                                variant="outline"
+                                onClick={() => setIsEditInvestmentModalOpen(false)}
+                            >
+                                Cancel
+                            </Button>
+                            <Button
+                                onClick={async () => {
+                                    try {
+                                        // TODO: Implement actual update logic
+                                        console.log('Saving investment:', editingInvestment);
+                                        alert('Investment updated successfully! (This is a placeholder - actual save functionality will be implemented)');
+                                        setIsEditInvestmentModalOpen(false);
+                                        // Refresh the investment list
+                                        await loadCapTableData();
+                                    } catch (error) {
+                                        console.error('Error updating investment:', error);
+                                        alert('Failed to update investment');
+                                    }
+                                }}
+                            >
+                                Save Changes
+                            </Button>
+                        </div>
+                    </div>
+                )}
+            </Modal>
 
         </div>
-    );
+        );
+    } catch (error) {
+        console.error('CapTableTab render error:', error);
+        return (
+            <div className="text-center py-8">
+                <p className="text-red-600 mb-4">An error occurred while loading the cap table.</p>
+                <Button onClick={() => window.location.reload()}>Reload Page</Button>
+            </div>
+        );
+    }
 };
 
 export default CapTableTab;

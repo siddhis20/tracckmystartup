@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { FinancialRecord, Expense, Revenue } from '../types';
+import { validateFinancialRecordDate } from './dateValidation';
 
 // =====================================================
 // FINANCIALS SERVICE
@@ -35,6 +36,12 @@ class FinancialsService {
   // =====================================================
 
   async addFinancialRecord(record: Omit<FinancialRecord, 'id'>): Promise<FinancialRecord> {
+    // Validate financial record date (no future dates allowed)
+    const dateValidation = validateFinancialRecordDate(record.date);
+    if (!dateValidation.isValid) {
+      throw new Error(dateValidation.error);
+    }
+
     const { data, error } = await supabase
       .from('financial_records')
       .insert({
@@ -57,6 +64,14 @@ class FinancialsService {
   }
 
   async updateFinancialRecord(id: string, updates: Partial<FinancialRecord>): Promise<FinancialRecord> {
+    // Validate financial record date if being updated (no future dates allowed)
+    if (updates.date !== undefined) {
+      const dateValidation = validateFinancialRecordDate(updates.date);
+      if (!dateValidation.isValid) {
+        throw new Error(dateValidation.error);
+      }
+    }
+
     const { data, error } = await supabase
       .from('financial_records')
       .update(updates)

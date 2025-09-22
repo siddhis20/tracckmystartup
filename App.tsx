@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Startup, NewInvestment, ComplianceStatus, StartupAdditionRequest, FundraisingDetails, InvestmentRecord, InvestmentType, UserRole, Founder, User, VerificationRequest, InvestmentOffer } from './types';
 import { authService, AuthUser } from './lib/auth';
 import { startupService, investmentService, verificationService, userService, realtimeService, startupAdditionService } from './lib/database';
@@ -14,37 +14,158 @@ import AdminView from './components/AdminView';
 import CAView from './components/CAView';
 import CSView from './components/CSView';
 import FacilitatorView from './components/FacilitatorView';
+import InvestmentAdvisorView from './components/InvestmentAdvisorView';
 import LoginPage from './components/LoginPage';
 import { TwoStepRegistration } from './components/TwoStepRegistration';
 import { CompleteRegistrationPage } from './components/CompleteRegistrationPage';
 import ResetPasswordPage from './components/ResetPasswordPage';
 import LandingPage from './components/LandingPage';
+import Footer from './components/Footer';
+import PageRouter from './components/PageRouter';
 
 import { Briefcase, BarChart3, LogOut } from 'lucide-react';
 import LogoTMS from './components/public/logoTMS.svg';
 import { FacilitatorCodeDisplay } from './components/FacilitatorCodeDisplay';
 
 const App: React.FC = () => {
-  const [view, setView] = useState<'startupHealth' | 'dashboard'>('dashboard');
+  // Check if we're on a standalone page (footer links)
+  const standalonePages = ['/privacy-policy', '/refund-policy', '/terms-conditions', '/about', '/contact', '/products'];
+  const currentPath = window.location.pathname;
+  
+  if (standalonePages.includes(currentPath)) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex flex-col">
+        <main className="flex-1">
+          <PageRouter />
+        </main>
+      </div>
+    );
+  }
+
+  // Cookie utility functions
+  const setCookie = (name: string, value: string, days: number = 7) => {
+    const expires = new Date();
+    expires.setTime(expires.getTime() + (days * 24 * 60 * 60 * 1000));
+    document.cookie = `${name}=${value};expires=${expires.toUTCString()};path=/`;
+  };
+
+  const getCookie = (name: string): string | null => {
+    const nameEQ = name + "=";
+    const ca = document.cookie.split(';');
+    for (let i = 0; i < ca.length; i++) {
+      let c = ca[i];
+      while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+      if (c.indexOf(nameEQ) === 0) return c.substring(nameEQ.length, c.length);
+    }
+    return null;
+  };
+
+  const deleteCookie = (name: string) => {
+    document.cookie = `${name}=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;`;
+  };
+
+  // Initialize view from cookie or default to dashboard
+  const [view, setView] = useState<'startupHealth' | 'dashboard'>(() => {
+    const savedView = getCookie('currentView');
+    return (savedView === 'startupHealth' || savedView === 'dashboard') ? savedView : 'dashboard';
+  });
   const [viewKey, setViewKey] = useState(0); // Force re-render key
   const [forceRender, setForceRender] = useState(0); // Additional force render
-  const [currentPage, setCurrentPage] = useState<'landing' | 'login' | 'register' | 'complete-registration' | 'reset-password'>('landing');
+  const [currentPage, setCurrentPage] = useState<'landing' | 'login' | 'register' | 'complete-registration' | 'reset-password'>(() => {
+    // Check if we're on a reset password URL
+    if (typeof window !== 'undefined') {
+      const pathname = window.location.pathname;
+      const searchParams = new URLSearchParams(window.location.search);
+      const hash = window.location.hash;
+      
+      // Check for reset password indicators
+      if (pathname === '/reset-password' || 
+          searchParams.get('type') === 'recovery' ||
+          hash.includes('type=recovery') ||
+          searchParams.get('access_token') ||
+          searchParams.get('refresh_token')) {
+        return 'reset-password';
+      }
+    }
+    return 'landing';
+  });
   
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [assignedInvestmentAdvisor, setAssignedInvestmentAdvisor] = useState<AuthUser | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessingAuthChange, setIsProcessingAuthChange] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hasInitialDataLoaded, setHasInitialDataLoaded] = useState(false);
+  const [ignoreAuthEvents, setIgnoreAuthEvents] = useState(false);
+
+  // Listen for URL changes to handle reset password links
+  useEffect(() => {
+    const handleUrlChange = () => {
+      const pathname = window.location.pathname;
+      const searchParams = new URLSearchParams(window.location.search);
+      const hash = window.location.hash;
+      
+      // Check for reset password indicators
+      if (pathname === '/reset-password' || 
+          searchParams.get('type') === 'recovery' ||
+          hash.includes('type=recovery') ||
+          searchParams.get('access_token') ||
+          searchParams.get('refresh_token')) {
+        setCurrentPage('reset-password');
+      }
+    };
+
+    // Check on mount
+    handleUrlChange();
+
+    // Listen for popstate events (back/forward navigation)
+    window.addEventListener('popstate', handleUrlChange);
+    
+    return () => {
+      window.removeEventListener('popstate', handleUrlChange);
+    };
+  }, []);
+
+  
+  
+
+
+
+
+
 
   const [selectedStartup, setSelectedStartup] = useState<Startup | null>(null);
   const [isViewOnly, setIsViewOnly] = useState(false);
+  const selectedStartupRef = useRef<Startup | null>(null);
+  const currentUserRef = useRef<AuthUser | null>(null);
   
   // Monitor view changes
   useEffect(() => {
-    console.log('🔍 View changed to:', view);
-    console.log('🔍 Selected startup:', selectedStartup);
-    console.log('🔍 isViewOnly:', isViewOnly);
+    // View change monitoring
   }, [view, selectedStartup, isViewOnly]);
+
+  // Global tab change tracker - listen for any tab changes in the app
+  useEffect(() => {
+    const handleTabChange = (event: CustomEvent) => {
+    };
+
+    // Listen for custom tab change events
+    window.addEventListener('tab-change', handleTabChange as EventListener);
+    
+    return () => {
+      window.removeEventListener('tab-change', handleTabChange as EventListener);
+    };
+  }, []);
+
+  // Keep refs in sync with state
+  useEffect(() => {
+    selectedStartupRef.current = selectedStartup;
+  }, [selectedStartup]);
+
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
   const [startups, setStartups] = useState<Startup[]>([]);
   const [newInvestments, setNewInvestments] = useState<NewInvestment[]>([]);
   const [startupAdditionRequests, setStartupAdditionRequests] = useState<StartupAdditionRequest[]>([]);
@@ -55,9 +176,82 @@ const App: React.FC = () => {
   const [investmentOffers, setInvestmentOffers] = useState<InvestmentOffer[]>([]);
   const [validationRequests, setValidationRequests] = useState<ValidationRequest[]>([]);
 
+  // Refs for state variables to avoid dependency issues
+  const startupsRef = useRef<Startup[]>([]);
+  const investmentOffersRef = useRef<InvestmentOffer[]>([]);
+  const validationRequestsRef = useRef<ValidationRequest[]>([]);
+
+  // Keep refs in sync with state
+  useEffect(() => {
+    startupsRef.current = startups;
+  }, [startups]);
+
+  useEffect(() => {
+    investmentOffersRef.current = investmentOffers;
+  }, [investmentOffers]);
+
+  useEffect(() => {
+    validationRequestsRef.current = validationRequests;
+  }, [validationRequests]);
+
+
   const [loadingProgress, setLoadingProgress] = useState<string>('Initializing...');
-  const [connectionError, setConnectionError] = useState(false);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  // Additional refs for fetchData dependencies
+  const isAuthenticatedRef = useRef<boolean>(false);
+  const hasInitialDataLoadedRef = useRef<boolean>(false);
+
+  // Keep refs in sync with state
+  useEffect(() => {
+    isAuthenticatedRef.current = isAuthenticated;
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    hasInitialDataLoadedRef.current = hasInitialDataLoaded;
+  }, [hasInitialDataLoaded]);
+
+
+  // Utility function to emit tab change events (can be used by dashboard components)
+  const emitTabChange = (tabName: string, component: string) => {
+    const event = new CustomEvent('tab-change', {
+      detail: { tabName, component }
+    });
+    window.dispatchEvent(event);
+  };
+
+  // Make emitTabChange available globally for dashboard components
+  (window as any).emitTabChange = emitTabChange;
+  
+  // Add global function to force data refresh
+  (window as any).forceDataRefresh = () => {
+    console.log('🔄 Global force data refresh triggered');
+    setHasInitialDataLoaded(false);
+    hasInitialDataLoadedRef.current = false;
+    // Reinitialize auth to reload data
+    initializeAuth();
+  };
+  
+  // Add global function to reset auth state (for debugging)
+  (window as any).resetAuthState = () => {
+    console.log('🔄 Global auth state reset triggered');
+    setCurrentUser(null);
+    setIsAuthenticated(false);
+    setHasInitialDataLoaded(false);
+    currentUserRef.current = null;
+    isAuthenticatedRef.current = false;
+    hasInitialDataLoadedRef.current = false;
+    // Clear cookies
+    setCookie('lastAuthUserId', '');
+    setCookie('lastAuthTimestamp', '');
+    // Reinitialize auth
+    initializeAuth();
+  };
+
+  // Save view to cookie whenever it changes
+  useEffect(() => {
+    setCookie('currentView', view, 1); // 1 day expiry
+  }, [view]);
+
 
   useEffect(() => {
     let isMounted = true;
@@ -147,9 +341,32 @@ const App: React.FC = () => {
 
     // Set up auth state listener
     const { data: { subscription } } = authService.onAuthStateChange(async (event, session) => {
-      console.log('Auth state changed:', event, session?.user?.email);
+      // SIMPLE FIX: If we're ignoring auth events, skip everything
+      if (ignoreAuthEvents) {
+        console.log('🚫 Ignoring auth event because ignoreAuthEvents flag is set');
+        return;
+      }
+      
+      const microSteps = [
+        `1. Auth event received: ${event}`,
+        `2. Session user: ${session?.user?.email || 'none'}`,
+        `3. Is authenticated: ${isAuthenticated}`,
+        `4. Current user: ${currentUser?.email || 'none'}`,
+        `5. Has initial data loaded: ${hasInitialDataLoaded}`,
+        `6. Current view: ${view}`,
+        `7. Is processing auth change: ${isProcessingAuthChange}`,
+        `8. Ignore auth events: ${ignoreAuthEvents}`
+      ];
+      
       
       if (!isMounted) return;
+      
+      // Prevent unnecessary refreshes for TOKEN_REFRESHED events
+      if (event === 'TOKEN_REFRESHED') {
+        return;
+      }
+
+      // Note: Duplicate auth event filtering is now handled at the Supabase level in auth.ts
       
       // Prevent multiple simultaneous auth state changes
       if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
@@ -157,6 +374,49 @@ const App: React.FC = () => {
         if (isProcessingAuthChange) {
           console.log('Auth state change already in progress, skipping...');
           return;
+        }
+        
+        // AGGRESSIVE FIX: Only block duplicate auth events, not all auth events
+        if (isAuthenticatedRef.current && currentUserRef.current && hasInitialDataLoadedRef.current && session?.user && currentUserRef.current.id === session.user.id) {
+          // Only block if this is a duplicate event (like window focus), not legitimate auth changes
+          if (event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
+            console.log('🚫 AGGRESSIVE FIX: Blocking duplicate auth event to prevent unnecessary refresh');
+            return;
+          }
+          // Allow other auth events to proceed (like profile updates, data changes)
+          console.log('✅ Allowing auth event to proceed:', event);
+        }
+        
+        // Check if this is a duplicate auth event using cookies
+        const lastAuthUserId = getCookie('lastAuthUserId');
+        const lastAuthTimestamp = getCookie('lastAuthTimestamp');
+        const currentTime = Date.now().toString();
+        
+        console.log('🔍 Auth event debug:', {
+          event,
+          sessionUserId: session?.user?.id,
+          lastAuthUserId,
+          lastAuthTimestamp,
+          currentTime,
+          isAuthenticated: isAuthenticatedRef.current,
+          currentUserId: currentUserRef.current?.id
+        });
+        
+        if (session?.user && lastAuthUserId === session.user.id && lastAuthTimestamp) {
+          const timeDiff = parseInt(currentTime) - parseInt(lastAuthTimestamp);
+          console.log('🔍 Time difference:', timeDiff, 'ms');
+          // If less than 5 seconds have passed, it's likely a duplicate event from window focus
+          if (timeDiff < 5000) {
+            console.log('🚫 Duplicate auth event detected (likely from window focus), skipping to prevent refresh');
+            return;
+          }
+        }
+        
+        // Store current auth info in cookies
+        if (session?.user) {
+          setCookie('lastAuthUserId', session.user.id, 1); // 1 day expiry
+          setCookie('lastAuthTimestamp', currentTime, 1);
+          console.log('💾 Stored auth info in cookies:', { userId: session.user.id, timestamp: currentTime });
         }
         
         setIsProcessingAuthChange(true);
@@ -181,10 +441,25 @@ const App: React.FC = () => {
                 startup_name: session.user.user_metadata?.startupName || undefined,
                 registration_date: new Date().toISOString().split('T')[0]
               };
-              console.log('Setting basic user from session and stopping loading');
+              const beforeUser = currentUser;
+              const microSteps = [
+                `1. Creating basic user from session`,
+                `2. User email: ${basicUser.email}`,
+                `3. User role: ${basicUser.role}`,
+                `4. User startup name: ${basicUser.startup_name || 'none'}`,
+                `5. Registration date: ${basicUser.registration_date}`,
+                `6. Previous user: ${beforeUser?.email || 'none'}`,
+                `7. Previous role: ${beforeUser?.role || 'none'}`,
+                `8. About to call setCurrentUser`
+              ];
+              
               setCurrentUser(basicUser);
               setIsAuthenticated(true);
               setIsLoading(false);
+              // Only reset data loading flag if this is a truly new user
+              if (!hasInitialDataLoaded) {
+                setHasInitialDataLoaded(false);
+              }
             }
 
             // Try to get full profile, and if it doesn't exist, create it automatically
@@ -300,9 +575,11 @@ const App: React.FC = () => {
       } else if (event === 'SIGNED_OUT') {
         if (isMounted) {
           setCurrentUser(null);
+          setAssignedInvestmentAdvisor(null);
           setIsAuthenticated(false);
           setIsLoading(false);
           setIsProcessingAuthChange(false);
+          setHasInitialDataLoaded(false); // Reset data loading flag on logout
         }
       }
     });
@@ -322,97 +599,113 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Monitor online/offline status
-  useEffect(() => {
-    const handleOnline = () => {
-      console.log('Browser went online');
-      setIsOnline(true);
-      setConnectionError(false);
-    };
 
-    const handleOffline = () => {
-      console.log('Browser went offline');
-      setIsOnline(false);
-      setConnectionError(true);
-    };
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
-
-  // Fetch data function
-  const fetchData = useCallback(async () => {
-    if (!isAuthenticated || !currentUser) return;
-    
+  // Fetch assigned investment advisor data
+  const fetchAssignedInvestmentAdvisor = useCallback(async (advisorCode: string) => {
     try {
-      console.log('Fetching data for authenticated user...');
-      console.log('Network status:', { isOnline, connectionError });
+      console.log('🔍 Fetching investment advisor data for code:', advisorCode);
+      const { data: advisor, error } = await supabase
+        .from('users')
+        .select('id, email, name, role, investment_advisor_code, logo_url')
+        .eq('investment_advisor_code', advisorCode)
+        .eq('role', 'Investment Advisor')
+        .single();
       
-      // Quick network connectivity test
-      if (!isOnline) {
-        console.log('Browser reports offline, setting connection error');
-        setConnectionError(true);
-        return;
+      if (error) {
+        console.error('❌ Error fetching investment advisor:', error);
+        return null;
       }
       
-      // Don't set loading to true here - it's already set during auth
+      if (advisor) {
+        console.log('✅ Found assigned investment advisor:', advisor);
+        console.log('🔍 Advisor logo_url:', advisor.logo_url);
+        console.log('🔍 Advisor has logo:', !!advisor.logo_url);
+        setAssignedInvestmentAdvisor(advisor);
+        return advisor;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('❌ Error in fetchAssignedInvestmentAdvisor:', error);
+      return null;
+    }
+  }, []);
+
+  // Fetch data function - simplified without window monitoring
+  const fetchData = useCallback(async (forceRefresh = false) => {
+    if (!isAuthenticatedRef.current || !currentUserRef.current) {
+      return;
+    }
+    
+    // Don't fetch data if we already have it and this isn't a forced refresh
+    if (hasInitialDataLoadedRef.current && !forceRefresh) {
+      return;
+    }
+    
+    try {
+      console.log('Fetching data for authenticated user...', { forceRefresh, hasInitialDataLoaded: hasInitialDataLoadedRef.current });
       
       // Fetch data with timeout to detect network issues
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Request timeout - network may be unavailable')), 10000); // 10 second timeout
       });
 
-             const dataPromise = Promise.allSettled([
-         // Use role-specific startup fetching
-         currentUser?.role === 'Admin' 
-           ? startupService.getAllStartupsForAdmin() 
-           : currentUser?.role === 'CA'
-           ? caService.getAssignedStartups().then(startups => 
-               startups.map(s => ({
-                 id: s.id,
-                 name: s.name,
-                 investmentType: 'Seed' as any,
-                 investmentValue: s.totalFunding || 0,
-                 equityAllocation: 0,
-                 currentValuation: s.totalFunding || 0,
-                 complianceStatus: s.complianceStatus,
-                 sector: s.sector,
-                 totalFunding: s.totalFunding,
-                 totalRevenue: s.totalRevenue,
-                 registrationDate: s.registrationDate,
-                 founders: []
-               }))
-             )
-           : currentUser?.role === 'CS'
-           ? csService.getAssignedStartups().then(startups =>
-               startups.map(s => ({
-                 id: s.id,
-                 name: s.name,
-                 investmentType: 'Seed' as any,
-                 investmentValue: s.totalFunding || 0,
-                 equityAllocation: 0,
-                 currentValuation: s.totalFunding || 0,
-                 complianceStatus: s.complianceStatus,
-                 sector: s.sector,
-                 totalFunding: s.totalFunding,
-                 totalRevenue: s.totalRevenue,
-                 registrationDate: s.registrationDate,
-                 founders: []
-               }))
-             )
-           : startupService.getAllStartups(),
-         investmentService.getNewInvestments(),
+             // Determine startup fetching method based on role
+         let startupPromise;
+         if (currentUserRef.current?.role === 'Admin') {
+           console.log('🔍 Using getAllStartupsForAdmin for Admin role');
+           startupPromise = startupService.getAllStartupsForAdmin();
+         } else if (currentUserRef.current?.role === 'Investment Advisor') {
+           console.log('🔍 Using getAllStartupsForInvestmentAdvisor for Investment Advisor role');
+           startupPromise = startupService.getAllStartupsForInvestmentAdvisor();
+         } else if (currentUserRef.current?.role === 'CA') {
+           startupPromise = caService.getAssignedStartups().then(startups => 
+             startups.map(s => ({
+               id: s.id,
+               name: s.name,
+               investmentType: 'Seed' as any,
+               investmentValue: s.totalFunding || 0,
+               equityAllocation: 0,
+               currentValuation: s.totalFunding || 0,
+               complianceStatus: s.complianceStatus,
+               sector: s.sector,
+               totalFunding: s.totalFunding,
+               totalRevenue: s.totalRevenue,
+               registrationDate: s.registrationDate,
+               founders: []
+             }))
+           );
+         } else if (currentUserRef.current?.role === 'CS') {
+           startupPromise = csService.getAssignedStartups().then(startups =>
+             startups.map(s => ({
+               id: s.id,
+               name: s.name,
+               investmentType: 'Seed' as any,
+               investmentValue: s.totalFunding || 0,
+               equityAllocation: 0,
+               currentValuation: s.totalFunding || 0,
+               complianceStatus: s.complianceStatus,
+               sector: s.sector,
+               totalFunding: s.totalFunding,
+               totalRevenue: s.totalRevenue,
+               registrationDate: s.registrationDate,
+               founders: []
+             }))
+           );
+         } else {
+           console.log('🔍 Using default startup fetching for role:', currentUserRef.current?.role);
+           startupPromise = startupService.getAllStartups();
+         }
+
+         const dataPromise = Promise.allSettled([
+           startupPromise,
+           investmentService.getNewInvestments(),
          userService.getStartupAdditionRequests(),
          userService.getAllUsers(),
          verificationService.getVerificationRequests(),
-         currentUser?.role === 'Investor' 
-           ? investmentService.getUserInvestmentOffers(currentUser.email)
-           : currentUser?.role === 'Admin'
+         currentUserRef.current?.role === 'Investor' 
+           ? investmentService.getUserInvestmentOffers(currentUserRef.current.email)
+           : currentUserRef.current?.role === 'Admin'
              ? investmentService.getAllInvestmentOffers()
              : Promise.resolve([]),
          validationService.getAllValidationRequests()
@@ -471,14 +764,28 @@ const App: React.FC = () => {
       console.log('Users loaded:', usersData.status === 'fulfilled' ? usersData.value.length : 0);
       console.log('Current user role:', currentUser?.role);
       
-      // For startup users, automatically find their startup
-      if (currentUser?.role === 'Startup' && startupsData.status === 'fulfilled') {
-        console.log('🔍 Auto-finding startup for user:', currentUser.email);
-        console.log('🔍 User startup_name:', currentUser.startup_name);
+      // Fetch assigned investment advisor if user has one
+      console.log('🔍 Checking for investment advisor code...');
+      console.log('🔍 Current user:', currentUserRef.current);
+      console.log('🔍 Investment advisor code entered:', currentUserRef.current?.investment_advisor_code_entered);
+      
+      if (currentUserRef.current?.investment_advisor_code_entered) {
+        console.log('🔍 User has assigned investment advisor code:', currentUserRef.current.investment_advisor_code_entered);
+        const advisorResult = await fetchAssignedInvestmentAdvisor(currentUserRef.current.investment_advisor_code_entered);
+        console.log('🔍 Advisor fetch result:', advisorResult);
+      } else {
+        console.log('🔍 User has no assigned investment advisor');
+        setAssignedInvestmentAdvisor(null);
+      }
+      
+      // For startup users, automatically find their startup (only if not already set)
+      if (currentUserRef.current?.role === 'Startup' && startupsData.status === 'fulfilled' && !selectedStartupRef.current) {
+        console.log('🔍 Auto-finding startup for user:', currentUserRef.current.email);
+        console.log('🔍 User startup_name:', currentUserRef.current.startup_name);
         console.log('🔍 Available startups:', startupsData.value.map(s => ({ name: s.name, id: s.id })));
         
         // Primary: match by startup_name from user profile
-        let userStartup = startupsData.value.find(startup => startup.name === currentUser.startup_name);
+        let userStartup = startupsData.value.find(startup => startup.name === currentUserRef.current.startup_name);
 
         // Fallback: if startup_name missing or mismatch, but user has exactly one startup, use it
         if (!userStartup && startupsData.value.length === 1) {
@@ -489,46 +796,27 @@ const App: React.FC = () => {
         console.log('🔍 Auto-found startup:', userStartup);
         
         if (userStartup) {
-          console.log('✅ Auto-setting startup and view');
           setSelectedStartup(userStartup);
-          setView('startupHealth');
+          // Only set view to startupHealth on initial load, not on subsequent data fetches
+          if (!hasInitialDataLoadedRef.current) {
+            setView('startupHealth');
+          } else {
+          }
         } else {
-          console.log('❌ No startup found during auto-find');
+        }
+      } else if (currentUserRef.current?.role === 'Startup' && selectedStartupRef.current) {
+        console.log('🔍 Startup user already has selected startup, preserving current state');
+        // Update selectedStartup with fresh data from the startups array
+        if (startupsData.status === 'fulfilled') {
+          const updatedStartup = startupsData.value.find(s => s.id === selectedStartupRef.current?.id);
+          if (updatedStartup) {
+            console.log('🔄 Updating selectedStartup with fresh data from database');
+            setSelectedStartup(updatedStartup);
+          }
         }
       }
     } catch (error) {
       console.error('Error fetching data:', error);
-      // Enhanced connection error detection
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const errorName = error instanceof Error ? error.name : '';
-      
-      // Check for various network/connection error patterns
-      const isConnectionError = 
-        !isOnline || // Browser reports offline
-        errorMessage.includes('fetch') || 
-        errorMessage.includes('network') || 
-        errorMessage.includes('Failed to fetch') ||
-        errorMessage.includes('ERR_NETWORK') ||
-        errorMessage.includes('ERR_INTERNET_DISCONNECTED') ||
-        errorMessage.includes('ERR_CONNECTION_REFUSED') ||
-        errorMessage.includes('ERR_CONNECTION_TIMED_OUT') ||
-        errorMessage.includes('ERR_NAME_NOT_RESOLVED') ||
-        errorMessage.includes('ERR_EMPTY_RESPONSE') ||
-        errorMessage.includes('ERR_INTERNET_DISCONNECTED') ||
-        errorName === 'TypeError' ||
-        errorName === 'NetworkError' ||
-        errorName === 'AbortError';
-      
-      console.log('Connection error detection:', { 
-        errorMessage, 
-        errorName, 
-        isConnectionError,
-        error: error 
-      });
-      
-      if (isConnectionError) {
-        setConnectionError(true);
-      }
       
       // Set empty arrays if data fetch fails
       setStartups([]);
@@ -539,16 +827,28 @@ const App: React.FC = () => {
       setInvestmentOffers([]);
     } finally {
       // Only set loading to false if we're still in loading state
-      if (isLoading) {
-        setIsLoading(false);
-      }
+      setIsLoading(false);
+      // Mark that initial data has been loaded
+      setHasInitialDataLoaded(true);
     }
-  }, [isAuthenticated, currentUser, isOnline, connectionError, isLoading]);
+  }, [fetchAssignedInvestmentAdvisor]);
 
-  // Fetch data when authenticated
+  // Fetch data when authenticated - simplified approach
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    if (isAuthenticated && currentUser && !hasInitialDataLoaded) {
+      fetchData();
+    }
+  }, [isAuthenticated, currentUser?.id]);
+
+  // Set ignore flag when user is fully authenticated and has data
+  useEffect(() => {
+    if (isAuthenticated && currentUser && hasInitialDataLoaded) {
+      console.log('✅ User fully authenticated with data loaded, setting ignoreAuthEvents flag');
+      setIgnoreAuthEvents(true);
+    } else {
+      setIgnoreAuthEvents(false);
+    }
+  }, [isAuthenticated, currentUser, hasInitialDataLoaded]);
 
 
   // Load startup-scoped offers after startup is resolved to avoid being overwritten by global fetch
@@ -559,7 +859,7 @@ const App: React.FC = () => {
         setInvestmentOffers(rows);
       }
     })();
-  }, [currentUser?.role, selectedStartup?.id]);
+  }, [selectedStartup?.id]);
 
 
 
@@ -574,7 +874,7 @@ const App: React.FC = () => {
     }
   }, []);
 
-  const handleRegister = useCallback((user: AuthUser, foundersData: Founder[], startupName?: string) => {
+  const handleRegister = useCallback((user: AuthUser, foundersData: Founder[], startupName?: string, investmentAdvisorCode?: string) => {
     console.log(`User ${user.email} registered as ${user.role}`);
     
     if (user.role === 'Startup' && foundersData.length > 0) {
@@ -606,25 +906,32 @@ const App: React.FC = () => {
       await authService.signOut();
       setIsAuthenticated(false);
       setCurrentUser(null);
+      setAssignedInvestmentAdvisor(null);
       setSelectedStartup(null);
       setCurrentPage('login');
       setView('investor');
+      setHasInitialDataLoaded(false); // Reset data loading flag on logout
+      setIgnoreAuthEvents(false); // Reset ignore flag on logout
+      
+      // Clear auth cookies on logout
+      deleteCookie('lastAuthUserId');
+      deleteCookie('lastAuthTimestamp');
+      deleteCookie('currentView');
     } catch (error) {
       console.error('Logout failed:', error);
     }
   }, []);
 
   const handleViewStartup = useCallback((startup: Startup | number, targetTab?: string) => {
-    console.log('🔍 handleViewStartup called with startup:', startup, 'targetTab:', targetTab);
-    console.log('🔍 Current user role:', currentUser?.role);
+    // logDiagnostic disabled to prevent interference
     
     // Handle both startup object and startup ID
     let startupObj: Startup;
     if (typeof startup === 'number') {
       // Find startup by ID
-      startupObj = startups.find(s => s.id === startup);
+      startupObj = startupsRef.current.find(s => s.id === startup);
       if (!startupObj) {
-        console.error('Startup not found with ID:', startup, 'in available startups:', startups.map(s => ({ id: s.id, name: s.name })));
+        console.error('Startup not found with ID:', startup, 'in available startups:', startupsRef.current.map(s => ({ id: s.id, name: s.name })));
         
         // If facilitator is trying to access a startup, we need to fetch it from the database
         if (currentUser?.role === 'Startup Facilitation Center') {
@@ -650,6 +957,7 @@ const App: React.FC = () => {
     // Set the startup and view
     setSelectedStartup(startupObj);
     setIsViewOnly(isViewOnlyMode);
+    // logDiagnostic disabled to prevent interference
     setView('startupHealth');
     
     // If facilitator is accessing, set the target tab
@@ -675,7 +983,7 @@ const App: React.FC = () => {
     }, 100);
     
     console.log('🔍 handleViewStartup completed');
-  }, [currentUser?.role, startups]);
+  }, [currentUser?.role]);
 
   // Separate async function to handle facilitator startup access
   const handleFacilitatorStartupAccess = async (startupId: number, targetTab?: string) => {
@@ -746,11 +1054,19 @@ const App: React.FC = () => {
   };
 
   const handleBackToPortfolio = useCallback(() => {
+    // logDiagnostic disabled to prevent interference
     setSelectedStartup(null);
     setIsViewOnly(false);
     setView('dashboard');
     setViewKey(prev => prev + 1); // Force re-render
   }, []);
+
+  // Add logging to view changes
+  const handleViewChange = useCallback((newView: 'startupHealth' | 'dashboard') => {
+    // logDiagnostic disabled to prevent interference
+    setView(newView);
+    setCookie('currentView', newView, 30);
+  }, [view]);
 
   const handleAcceptStartupRequest = useCallback(async (requestId: number) => {
     try {
@@ -807,7 +1123,7 @@ const App: React.FC = () => {
           investorCode: (currentUser as any)?.investorCode 
       });
       
-      const normalizedInvestorCode = (currentUser as any)?.investor_code || (currentUser as any)?.investorCode || investment.investorCode;
+      const normalizedInvestorCode = (currentUserRef.current as any)?.investor_code || (currentUserRef.current as any)?.investorCode || investment.investorCode;
       console.log('🔍 Normalized investor code:', normalizedInvestorCode);
       
       if (!investment.investorCode) {
@@ -859,7 +1175,7 @@ const App: React.FC = () => {
           console.error('❌ Error creating startup addition request:', error);
           alert('Failed to create investor request. Please try again.');
       }
-  }, [currentUser]);
+  }, []);
 
   const handleUpdateFounders = useCallback((startupId: number, founders: Founder[]) => {
     setStartups(prevStartups => 
@@ -871,25 +1187,33 @@ const App: React.FC = () => {
         setSelectedStartup(prev => prev ? { ...prev, founders } : null);
     }
     alert('Founder information updated successfully.');
-  }, [selectedStartup]);
+  }, []);
 
-  const handleSubmitOffer = useCallback(async (opportunity: NewInvestment, offerAmount: number, equityPercentage: number) => {
-    if (!currentUser) return;
+  const handleSubmitOffer = useCallback(async (opportunity: NewInvestment, offerAmount: number, equityPercentage: number, country?: string, startupAmountRaised?: number) => {
+    if (!currentUserRef.current) return;
     
     try {
       // Since we're now referencing new_investments table which has the same IDs as startups,
       // we can use the opportunity.id directly (which is the startup ID)
       const newOffer = await investmentService.createInvestmentOffer({
-        investor_email: currentUser.email,
+        investor_email: currentUserRef.current.email,
         startup_name: opportunity.name,
         startup_id: opportunity.id, // This is the startup ID from the startups table
         offer_amount: offerAmount,
-        equity_percentage: equityPercentage
+        equity_percentage: equityPercentage,
+        country: country || 'United States',
+        startup_amount_raised: startupAmountRaised || opportunity.totalFunding
       });
       
       // Update local state
       setInvestmentOffers(prev => [newOffer, ...prev]);
-      alert(`Your offer for ${opportunity.name} has been submitted to the administration for review.`);
+      
+      const scoutingFee = newOffer.startup_scouting_fee_paid || 0;
+      if (scoutingFee > 0) {
+        alert(`Your offer for ${opportunity.name} has been submitted successfully! A startup scouting fee of $${scoutingFee.toFixed(2)} has been paid. The startup will now review your offer.`);
+      } else {
+        alert(`Your offer for ${opportunity.name} has been submitted successfully! The startup will now review your offer.`);
+      }
     } catch (error) {
       console.error('Error submitting offer:', error);
       
@@ -903,7 +1227,7 @@ const App: React.FC = () => {
       
       alert(errorMessage);
     }
-  }, [currentUser]);
+  }, []);
 
   const handleProcessVerification = useCallback(async (requestId: number, status: 'approved' | 'rejected') => {
     try {
@@ -934,7 +1258,7 @@ const App: React.FC = () => {
         o.id === offerId ? { ...o, status } : o
       ));
       
-      const offer = investmentOffers.find(o => o.id === offerId);
+      const offer = investmentOffersRef.current.find(o => o.id === offerId);
       if (offer) {
         let message = `The offer for ${offer.startupName} from ${offer.investorEmail} has been ${status}.`;
         
@@ -950,7 +1274,7 @@ const App: React.FC = () => {
       console.error('Error processing offer:', error);
       alert('Failed to process offer. Please try again.');
     }
-  }, [investmentOffers]);
+  }, []);
 
   const handleUpdateOffer = useCallback(async (offerId: number, offerAmount: number, equityPercentage: number) => {
     try {
@@ -1002,7 +1326,7 @@ const App: React.FC = () => {
         r.id === requestId ? updatedRequest : r
       ));
       
-      const request = validationRequests.find(r => r.id === requestId);
+      const request = validationRequestsRef.current.find(r => r.id === requestId);
       if (request) {
         alert(`The validation request for ${request.startupName} has been ${status}.`);
       }
@@ -1010,7 +1334,7 @@ const App: React.FC = () => {
       console.error('Error processing validation request:', error);
       alert('Failed to process validation request. Please try again.');
     }
-  }, [validationRequests]);
+  }, []);
 
   const handleUpdateCompliance = useCallback(async (startupId: number, status: ComplianceStatus) => {
     try {
@@ -1064,7 +1388,7 @@ const App: React.FC = () => {
       ));
       
       // Get startup name for alert
-      const startup = startups.find(s => s.id === startupId);
+      const startup = startupsRef.current.find(s => s.id === startupId);
       const startupName = startup?.name || 'Startup';
       
       console.log(`✅ Successfully updated ${startupName} compliance status to ${status}`);
@@ -1073,9 +1397,10 @@ const App: React.FC = () => {
       console.error('❌ Error updating compliance:', error);
       alert(`Failed to update compliance status: ${error.message || 'Unknown error'}. Please try again.`);
     }
-  }, [startups]);
+  }, []);
 
   const handleProfileUpdate = useCallback((updatedUser: any) => {
+    console.log('🚨 handleProfileUpdate called - this might trigger refresh');
     // Update the currentUser state with the new profile data
     setCurrentUser(prevUser => ({
       ...prevUser,
@@ -1110,18 +1435,38 @@ const App: React.FC = () => {
       )
   }
 
+
+
   // Check if we need to show complete-registration page (even when authenticated)
   if (currentPage === 'complete-registration') {
     console.log('🎯 Showing CompleteRegistrationPage (Form 2)');
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-100">
-        <CompleteRegistrationPage 
-          onNavigateToRegister={() => setCurrentPage('register')}
-          onNavigateToDashboard={() => {
-            setCurrentPage('login');
-            setIsAuthenticated(true);
-          }}
-        />
+      <div className="min-h-screen bg-slate-100 flex flex-col">
+        <div className="flex-1 flex items-center justify-center">
+          <CompleteRegistrationPage 
+            onNavigateToRegister={() => setCurrentPage('register')}
+            onNavigateToDashboard={async () => {
+              console.log('🔄 Navigating to dashboard after registration completion');
+              // Refresh the current user data to get updated Investment Advisor code and logo
+              try {
+                const refreshedUser = await authService.getCurrentUser();
+                if (refreshedUser) {
+                  console.log('✅ User data refreshed for dashboard:', refreshedUser);
+                  setCurrentUser(refreshedUser);
+                  setIsAuthenticated(true);
+                  setCurrentPage('login'); // This will show the main dashboard
+                }
+              } catch (error) {
+                console.error('❌ Error refreshing user data:', error);
+                // Still navigate even if refresh fails
+                setIsAuthenticated(true);
+                setCurrentPage('login');
+              }
+            }}
+          />
+        </div>
+        {/* Footer for complete-registration page */}
+        <Footer />
       </div>
     );
   }
@@ -1130,10 +1475,14 @@ const App: React.FC = () => {
   if (currentPage === 'reset-password') {
     console.log('🎯 Showing ResetPasswordPage');
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-100">
-        <ResetPasswordPage 
-          onNavigateToLogin={() => setCurrentPage('login')}
-        />
+      <div className="min-h-screen bg-slate-100 flex flex-col">
+        <div className="flex-1 flex items-center justify-center">
+          <ResetPasswordPage 
+            onNavigateToLogin={() => setCurrentPage('login')}
+          />
+        </div>
+        {/* Footer for reset-password page */}
+        <Footer />
       </div>
     );
   }
@@ -1142,37 +1491,61 @@ const App: React.FC = () => {
   
   if (!isAuthenticated) {
     return (
-        <div className="flex items-center justify-center min-h-screen bg-slate-100">
-            {currentPage === 'landing' ? (
-                <LandingPage
-                  onNavigateToLogin={() => setCurrentPage('login')}
-                  onNavigateToRegister={() => setCurrentPage('register')}
-                />
-            ) : currentPage === 'login' ? (
-                <LoginPage 
-                    onLogin={handleLogin} 
-                    onNavigateToRegister={() => setCurrentPage('register')} 
-                    onNavigateToCompleteRegistration={() => {
-                        console.log('🔄 Navigating to complete-registration page');
-                        setCurrentPage('complete-registration');
-                    }}
-                    onNavigateToLanding={() => setCurrentPage('landing')}
-                />
-            ) : currentPage === 'register' ? (
-                <TwoStepRegistration 
-                  onRegister={handleRegister} 
-                  onNavigateToLogin={() => setCurrentPage('login')} 
-                  onNavigateToLanding={() => setCurrentPage('landing')}
-                />
-            ) : (
-                <CompleteRegistrationPage 
-                  onNavigateToRegister={() => setCurrentPage('register')}
-                  onNavigateToDashboard={() => {
-                    setCurrentPage('login');
-                    setIsAuthenticated(true);
-                  }}
-                />
-            )}
+        <div className="min-h-screen bg-slate-100 flex flex-col">
+            <div className="flex-1 flex items-center justify-center">
+                {currentPage === 'landing' ? (
+                    <LandingPage
+                      onNavigateToLogin={() => setCurrentPage('login')}
+                      onNavigateToRegister={() => setCurrentPage('register')}
+                    />
+                ) : currentPage === 'login' ? (
+                    <LoginPage 
+                        onLogin={handleLogin} 
+                        onNavigateToRegister={() => setCurrentPage('register')} 
+                        onNavigateToCompleteRegistration={() => {
+                            console.log('🔄 Navigating to complete-registration page');
+                            setCurrentPage('complete-registration');
+                        }}
+                        onNavigateToLanding={() => setCurrentPage('landing')}
+                    />
+                ) : currentPage === 'register' ? (
+                    <TwoStepRegistration 
+                        onRegister={handleRegister} 
+                        onNavigateToLogin={() => setCurrentPage('login')} 
+                        onNavigateToLanding={() => setCurrentPage('landing')}
+                    />
+                ) : (
+                    <CompleteRegistrationPage 
+                      onNavigateToRegister={() => setCurrentPage('register')}
+                      onNavigateToDashboard={async () => {
+                        console.log('🔄 Navigating to dashboard after registration completion');
+                        // Refresh the current user data to get updated Investment Advisor code and logo
+                        try {
+                          const refreshedUser = await authService.getCurrentUser();
+                          if (refreshedUser) {
+                            console.log('✅ User data refreshed for dashboard:', refreshedUser);
+                            setCurrentUser(refreshedUser);
+                            setIsAuthenticated(true);
+                            setCurrentPage('login'); // This will show the main dashboard
+                            
+                            // Force refresh startup data after registration
+                            console.log('🔄 Forcing startup data refresh after registration...');
+                            setTimeout(() => {
+                              fetchData(true); // Force refresh with true parameter
+                            }, 1000); // Small delay to ensure database transaction is committed
+                          }
+                        } catch (error) {
+                          console.error('❌ Error refreshing user data:', error);
+                          // Still navigate even if refresh fails
+                          setIsAuthenticated(true);
+                          setCurrentPage('login');
+                        }
+                      }}
+                    />
+                )}
+            </div>
+            {/* Footer only for landing page */}
+            {currentPage === 'landing' && <Footer />}
         </div>
     )
   }
@@ -1196,47 +1569,6 @@ const App: React.FC = () => {
       );
     }
 
-    // Handle connection error
-    if (connectionError) {
-      return (
-        <div className="text-center py-20">
-          <div className="w-16 h-16 mx-auto mb-4 bg-red-100 rounded-full flex items-center justify-center">
-            <svg className="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
-            </svg>
-          </div>
-          <h2 className="text-xl font-semibold text-red-600 mb-2">Connection Error</h2>
-          <p className="text-slate-600 mb-4">
-            {!isOnline 
-              ? "Your device appears to be offline. Please check your internet connection."
-              : "Unable to connect to the server. Please check your internet connection and try again."
-            }
-          </p>
-          <div className="flex gap-3 justify-center mb-4">
-            <button 
-              onClick={() => window.location.reload()} 
-              className="px-4 py-2 bg-brand-primary text-white rounded-md hover:bg-brand-primary/90 transition-colors"
-            >
-              Retry Connection
-            </button>
-            <button 
-              onClick={() => {
-                setConnectionError(false);
-                setIsLoading(true);
-                fetchData();
-              }} 
-              className="px-4 py-2 bg-slate-200 text-slate-700 rounded-md hover:bg-slate-300 transition-colors"
-            >
-              Try Again
-            </button>
-          </div>
-          <div className="mt-4 text-sm text-slate-400">
-            <p>Network Status: {isOnline ? 'Online' : 'Offline'}</p>
-            <p>If the problem persists, please contact support.</p>
-          </div>
-        </div>
-      );
-    }
 
     // Role-based views
     if (currentUser?.role === 'Admin') {
@@ -1293,6 +1625,19 @@ const App: React.FC = () => {
       );
     }
 
+    if (currentUser?.role === 'Investment Advisor') {
+      return (
+        <InvestmentAdvisorView
+          currentUser={currentUser}
+          users={users}
+          startups={startups}
+          investments={newInvestments}
+          offers={investmentOffers}
+          interests={[]} // TODO: Add investment interests data
+        />
+      );
+    }
+
     if (currentUser?.role === 'Investor') {
       return (
         <InvestorView 
@@ -1323,7 +1668,11 @@ const App: React.FC = () => {
         userStartup = startups[0];
       }
       
+      console.log('🚨🚨🚨 APP COMPONENT DEBUGGING - STARTUP DATA 🚨🚨🚨');
       console.log('🔍 Found user startup:', userStartup);
+      console.log('🔍 User startup founders:', userStartup?.founders);
+      console.log('🔍 User startup ESOP reserved shares:', userStartup?.esopReservedShares);
+      console.log('🚨🚨🚨 END APP COMPONENT DEBUGGING 🚨🚨🚨');
       
       // If user's startup is found, show the health view
       if (userStartup) {
@@ -1369,11 +1718,62 @@ const App: React.FC = () => {
 
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-800">
+    <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col">
       <header className="bg-white shadow-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
           <div className="flex items-center gap-3">
-            <img src={LogoTMS} alt="TrackMyStartup" className="h-8 w-8 scale-[5] md:scale-[4] lg:scale-[5] xl:scale-[6] origin-left" />
+            {/* Show investment advisor logo if user is an Investment Advisor OR has an assigned investment advisor */}
+            {(() => {
+              const isInvestmentAdvisor = currentUser?.role === 'Investment Advisor' && (currentUser as any)?.logo_url;
+              const hasAssignedAdvisor = assignedInvestmentAdvisor && (currentUser?.role === 'Investor' || currentUser?.role === 'Startup');
+              const shouldShowAdvisorLogo = Boolean(isInvestmentAdvisor || hasAssignedAdvisor);
+              
+              console.log('🔍 Header logo display check:', {
+                currentUserRole: currentUser?.role,
+                currentUserLogo: (currentUser as any)?.logo_url,
+                assignedAdvisor: !!assignedInvestmentAdvisor,
+                assignedAdvisorLogo: assignedInvestmentAdvisor?.logo_url,
+                isInvestmentAdvisor,
+                hasAssignedAdvisor,
+                shouldShowAdvisorLogo
+              });
+              return shouldShowAdvisorLogo;
+            })() ? (
+              <div className="flex items-center gap-3">
+                {((currentUser?.role === 'Investment Advisor' && (currentUser as any)?.logo_url) || 
+                  (assignedInvestmentAdvisor?.logo_url)) ? (
+                  <>
+                    <img 
+                      src={currentUser?.role === 'Investment Advisor' 
+                        ? (currentUser as any).logo_url 
+                        : assignedInvestmentAdvisor?.logo_url} 
+                      alt="Company Logo" 
+                      className="h-8 w-8 rounded object-contain bg-white border border-gray-200 p-1"
+                      onError={(e) => {
+                        // Fallback to TrackMyStartup logo if image fails to load
+                        e.currentTarget.style.display = 'none';
+                        e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                      }}
+                    />
+                    <img src={LogoTMS} alt="TrackMyStartup" className="h-8 w-8 scale-[5] md:scale-[4] lg:scale-[5] xl:scale-[6] origin-left hidden" />
+                  </>
+                ) : (
+                  <div className="h-8 w-8 rounded bg-purple-100 border border-purple-200 flex items-center justify-center">
+                    <span className="text-purple-600 font-semibold text-xs">IA</span>
+                  </div>
+                )}
+                <div>
+                  <h1 className="text-lg font-semibold text-gray-800">
+                    {currentUser?.role === 'Investment Advisor' 
+                      ? (currentUser as any).name || 'Investment Advisor'
+                      : assignedInvestmentAdvisor?.name || 'Investment Advisor'}
+                  </h1>
+                  <p className="text-xs text-blue-600">Supported by Track My Startup</p>
+                </div>
+              </div>
+            ) : (
+              <img src={LogoTMS} alt="TrackMyStartup" className="h-8 w-8 scale-[5] md:scale-[4] lg:scale-[5] xl:scale-[6] origin-left" />
+            )}
           </div>
            <div className="flex items-center gap-6">
             {currentUser?.role === 'Investor' && (
@@ -1392,6 +1792,22 @@ const App: React.FC = () => {
                     className="bg-blue-100 text-blue-800 px-3 py-1 rounded-md text-sm font-medium" 
                     currentUser={currentUser}
                 />
+            )}
+
+            {currentUser?.role === 'Investment Advisor' && (
+                <div className="hidden sm:block text-sm text-slate-500 bg-slate-100 px-3 py-1.5 rounded-md font-mono">
+                    Advisor Code: <span className="font-semibold text-brand-primary">
+                        {(currentUser as any)?.investment_advisor_code || 'IA-XXXXXX'}
+                    </span>
+                </div>
+            )}
+
+            {(currentUser?.role === 'Investor' || currentUser?.role === 'Startup') && currentUser?.investment_advisor_code_entered && (
+                <div className="hidden sm:block text-sm text-slate-500 bg-purple-100 px-3 py-1.5 rounded-md font-mono">
+                    Advisor: <span className="font-semibold text-purple-800">
+                        {currentUser.investment_advisor_code_entered}
+                    </span>
+                </div>
             )}
 
             <button onClick={handleLogout} className="flex items-center gap-2 text-sm font-medium text-slate-600 hover:text-brand-primary transition-colors">
@@ -1419,9 +1835,11 @@ const App: React.FC = () => {
         </div>
       )}
       
-      <main className="container mx-auto p-4 sm:p-6 lg:p-8">
+      <main className="container mx-auto p-4 sm:p-6 lg:p-8 flex-1">
         <MainContent key={`${viewKey}-${forceRender}`} />
       </main>
+      
+      {/* Footer removed - only shows on landing page */}
     </div>
   );
 };

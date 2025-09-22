@@ -5,12 +5,15 @@ import SimpleModal from '../ui/SimpleModal';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import Select from '../ui/Select';
+import DateInput from '../DateInput';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from 'recharts';
 import { Plus, Trash2, Edit3, Save, X, Download } from 'lucide-react';
 import { employeesService } from '../../lib/employeesService';
 import { storageService } from '../../lib/storage';
 import { profileService } from '../../lib/profileService';
 import { capTableService } from '../../lib/capTableService';
+import { formatCurrency as formatCurrencyUtil, formatCurrencyCompact } from '../../lib/utils';
+import { useStartupCurrency } from '../../lib/hooks/useStartupCurrency';
 
 interface EmployeesTabProps {
   startup: Startup;
@@ -18,7 +21,7 @@ interface EmployeesTabProps {
   isViewOnly?: boolean;
 }
 
-const formatCurrency = (value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact' }).format(value);
+// Remove local formatCurrency function - using utility function instead
 
 // Dynamic data generation based on startup - now using real data
 const generateMonthlyExpenseData = async (startup: Startup) => {
@@ -78,6 +81,7 @@ const generateMockEmployees = async (startup: Startup): Promise<Employee[]> => {
 const COLORS = ['#1e40af', '#1d4ed8', '#3b82f6'];
 
 const EmployeesTab: React.FC<EmployeesTabProps> = ({ startup, userRole, isViewOnly = false }) => {
+    const startupCurrency = useStartupCurrency(startup);
     const [isEditing, setIsEditing] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -162,10 +166,31 @@ const EmployeesTab: React.FC<EmployeesTabProps> = ({ startup, userRole, isViewOn
                 : (parseFloat(formData.get('esopPerAllocation') as string) || 0);
 
             // Validation: allocated ESOPs must not exceed reserved ESOPs value (USD)
-            const prospectiveAllocatedTotal = (summary?.total_esop_allocated || mockEmployees.reduce((acc, emp) => acc + emp.esopAllocation, 0)) + (esopAllocationValue || 0);
-            if (reservedEsopValue > 0 && prospectiveAllocatedTotal > reservedEsopValue) {
-                setError('Total ESOP allocation would exceed the reserved ESOPs value. Reduce the allocation or increase reserved ESOPs.');
+            const currentAllocatedTotal = summary?.total_esop_allocated || mockEmployees.reduce((acc, emp) => acc + emp.esopAllocation, 0);
+            const prospectiveAllocatedTotal = currentAllocatedTotal + (esopAllocationValue || 0);
+            
+            // Check if this would exceed reserved amount
+            if (pricePerShare > 0 && reservedEsopValue > 0 && prospectiveAllocatedTotal > reservedEsopValue) {
+                setError(`Total ESOP allocation would exceed the reserved ESOPs value. Current: ${formatCurrencyUtil(currentAllocatedTotal, startupCurrency)}, Adding: ${formatCurrencyUtil(esopAllocationValue || 0, startupCurrency)}, Reserved: ${formatCurrencyUtil(reservedEsopValue, startupCurrency)}. Reduce the allocation or increase reserved ESOPs.`);
                 return;
+            }
+            
+            // Check if no ESOP shares are reserved but trying to allocate
+            if (esopReservedShares === 0 && (esopAllocationValue || 0) > 0) {
+                setError('Cannot allocate ESOPs when no shares are reserved for ESOP. Please set ESOP reserved shares first.');
+                return;
+            }
+
+            // Validation: Employee joining date must not be before company registration date
+            const joiningDate = formData.get('joiningDate') as string;
+            if (joiningDate && startup.registrationDate) {
+                const joiningDateObj = new Date(joiningDate);
+                const registrationDateObj = new Date(startup.registrationDate);
+                
+                if (joiningDateObj < registrationDateObj) {
+                    setError(`Employee joining date cannot be before the company registration date (${startup.registrationDate}). Please select a date on or after the registration date.`);
+                    return;
+                }
             }
 
             const employeeData = {
@@ -237,6 +262,56 @@ const EmployeesTab: React.FC<EmployeesTabProps> = ({ startup, userRole, isViewOn
     // ESOP Reserved: USD = shares * latest price/share
     const reservedEsopValue = (esopReservedShares || 0) * (pricePerShare || 0);
     const allocatedEsopValue = summary?.total_esop_allocated || mockEmployees.reduce((acc, emp) => acc + emp.esopAllocation, 0);
+    
+    // Calculate ESOP percentage with improved logic
+    const esopPercentage = (() => {
+        // If we have both reserved shares and allocated value, calculate percentage
+        if (esopReservedShares > 0 && allocatedEsopValue > 0) {
+            if (pricePerShare > 0) {
+                // Use monetary value calculation when price per share is available
+                const reservedValue = esopReservedShares * pricePerShare;
+                return ((allocatedEsopValue / reservedValue) * 100).toFixed(1);
+            } else {
+                // If no price per share, assume allocated value represents the reserved value
+                // This handles the case where price per share is not set but we have allocations
+                return ((allocatedEsopValue / allocatedEsopValue) * 100).toFixed(1); // This will be 100%
+            }
+        } else if (esopReservedShares > 0 && allocatedEsopValue === 0) {
+            // Reserved shares but no allocations yet
+            return '0';
+        } else if (esopReservedShares === 0 && allocatedEsopValue > 0) {
+            // Allocations but no reserved shares - this is an error state
+            return 'N/A';
+        }
+        return '0';
+    })();
+    
+    // Check if allocation exceeds reserved amount
+    const isOverAllocated = (() => {
+        if (pricePerShare > 0) {
+            // Use monetary comparison when price per share is available
+            return allocatedEsopValue > reservedEsopValue;
+        } else if (esopReservedShares > 0 && allocatedEsopValue > 0) {
+            // If no price per share but we have both reserved shares and allocations,
+            // we can't make a direct comparison, so we'll assume it's valid
+            return false;
+        }
+        return false;
+    })();
+    
+    // Debug ESOP calculations
+    console.log('🔍 ESOP Calculation Debug:', {
+        esopReservedShares,
+        pricePerShare,
+        reservedEsopValue,
+        allocatedEsopValue,
+        esopPercentage,
+        isOverAllocated,
+        mockEmployees: mockEmployees.map(emp => ({ 
+            name: emp.name, 
+            esopAllocation: emp.esopAllocation
+        }))
+    });
 
     if (isLoading) {
         return (
@@ -256,6 +331,23 @@ const EmployeesTab: React.FC<EmployeesTabProps> = ({ startup, userRole, isViewOn
             {error && (
                 <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
                     {error}
+                </div>
+            )}
+
+            {/* ESOP Over-allocation Warning */}
+            {isOverAllocated && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+                    <div className="flex items-center">
+                        <span className="text-red-500 mr-2">⚠️</span>
+                        <div>
+                            <p className="font-medium">ESOP Over-allocation Detected</p>
+                            <p className="text-sm">
+                                Total allocated ESOPs ({formatCurrencyUtil(allocatedEsopValue, startupCurrency)}) 
+                                exceeds reserved ESOPs ({formatCurrencyUtil(reservedEsopValue, startupCurrency)}).
+                                Please reduce employee allocations or increase reserved shares.
+                            </p>
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -298,11 +390,22 @@ const EmployeesTab: React.FC<EmployeesTabProps> = ({ startup, userRole, isViewOn
                         <span className="text-slate-500">(shares)</span>
                         <Button size="sm" variant="outline" onClick={() => setIsEsopModalOpen(true)}>Edit</Button>
                     </div>
-                    <p className="text-2xl font-bold mt-1">{formatCurrency(reservedEsopValue)}</p>
+                    <p className="text-2xl font-bold mt-1">{formatCurrencyUtil(reservedEsopValue, startupCurrency)}</p>
+                    {pricePerShare === 0 && (
+                        <div className="text-xs text-amber-600 mt-1">
+                            <p className="font-medium">⚠️ Price per share not set</p>
+                            <p className="mt-1">Go to Cap Table tab → Company Settings to set the price per share</p>
+                        </div>
+                    )}
                 </Card>
                 <Card>
                     <p className="text-sm font-medium text-slate-500">Total Equity Allocated as ESOPs</p>
-                    <p className="text-2xl font-bold">{formatCurrency(allocatedEsopValue)} ({reservedEsopValue > 0 ? ((allocatedEsopValue / reservedEsopValue) * 100).toFixed(1) : 0}%)</p>
+                    <p className="text-2xl font-bold">{formatCurrencyUtil(allocatedEsopValue, startupCurrency)} ({esopPercentage}%)</p>
+                    {esopPercentage === 'N/A' && (
+                        <p className="text-xs text-red-600 mt-1">
+                            ⚠️ No ESOP shares reserved but allocations exist
+                        </p>
+                    )}
                 </Card>
             </div>
 
@@ -440,7 +543,13 @@ const EmployeesTab: React.FC<EmployeesTabProps> = ({ startup, userRole, isViewOn
                 <fieldset disabled={!canEdit}>
                     <form onSubmit={handleAddEmployee} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                         <Input label="Employee Name" name="name" required />
-                        <Input label="Date of Joining" name="joiningDate" type="date" required />
+                        <Input 
+                            label="Date of Joining" 
+                            name="joiningDate" 
+                            type="date" 
+                            max={new Date().toISOString().split('T')[0]}
+                            required 
+                        />
                         <Select label="Entity" name="entity">
                             {entities.map((entity, index) => (
                                 <option key={index} value={entity}>{entity}</option>
@@ -515,8 +624,8 @@ const EmployeesTab: React.FC<EmployeesTabProps> = ({ startup, userRole, isViewOn
                                 <tr key={emp.id}>
                                     <td className="px-4 py-2 font-medium text-slate-900">{emp.name}</td>
                                     <td className="px-4 py-2 text-slate-500">{emp.department}</td>
-                                    <td className="px-4 py-2 text-slate-500">{formatCurrency(emp.salary)}</td>
-                                    <td className="px-4 py-2 text-slate-500">{formatCurrency(emp.esopAllocation)}</td>
+                                    <td className="px-4 py-2 text-slate-500">{formatCurrencyUtil(emp.salary, startupCurrency)}</td>
+                                    <td className="px-4 py-2 text-slate-500">{formatCurrencyUtil(emp.esopAllocation, startupCurrency)}</td>
                                     <td className="px-4 py-2 text-slate-500">
                                         {emp.contractUrl ? (
                                             <a href={emp.contractUrl} className="flex items-center text-brand-primary hover:underline">

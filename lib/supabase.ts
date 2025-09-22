@@ -1,32 +1,48 @@
 import { createClient } from '@supabase/supabase-js'
+import { getCurrentConfig } from '../config/environment'
 
-// Read env in a way compatible with Vite's define and provide safe fallbacks
-// Direct references to process.env.* ensure Vite replaces them at build time.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const SUPABASE_URL_FROM_DEFINE: any = (process as any).env && (process as any).env.VITE_SUPABASE_URL
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const SUPABASE_ANON_FROM_DEFINE: any = (process as any).env && (process as any).env.VITE_SUPABASE_ANON_KEY
+// Get current environment configuration
+const config = getCurrentConfig();
 
-const supabaseUrl =
-  (import.meta as any)?.env?.VITE_SUPABASE_URL ||
-  SUPABASE_URL_FROM_DEFINE ||
-  'https://dlesebbmlrewsbmqvuza.supabase.co'
+console.log('Current environment config:', config);
 
-const supabaseAnonKey =
-  (import.meta as any)?.env?.VITE_SUPABASE_ANON_KEY ||
-  SUPABASE_ANON_FROM_DEFINE ||
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRsZXNlYmJtbHJld3NibXF2dXphIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ1NTMxMTcsImV4cCI6MjA3MDEyOTExN30.zFTVSgL5QpVqEDc-nQuKbaG_3egHZEm-V17UvkOpFCQ'
+// Custom storage implementation that doesn't trigger on window focus
+const customStorage = {
+  getItem: (key: string) => {
+    try {
+      return localStorage.getItem(key);
+    } catch (error) {
+      console.warn('Error reading from localStorage:', error);
+      return null;
+    }
+  },
+  setItem: (key: string, value: string) => {
+    try {
+      localStorage.setItem(key, value);
+    } catch (error) {
+      console.warn('Error writing to localStorage:', error);
+    }
+  },
+  removeItem: (key: string) => {
+    try {
+      localStorage.removeItem(key);
+    } catch (error) {
+      console.warn('Error removing from localStorage:', error);
+    }
+  }
+};
 
-console.log('Initializing Supabase client with URL:', supabaseUrl);
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+export const supabase = createClient(config.supabaseUrl, config.supabaseAnonKey, {
   auth: {
     persistSession: true,
     storageKey: 'supabase-auth',
-    autoRefreshToken: true,
+    autoRefreshToken: false, // Disable automatic token refresh to prevent window focus triggers
     detectSessionInUrl: true,
     flowType: 'pkce',
-    emailRedirectTo: `${window.location.origin}/complete-registration`
+    // Use custom storage to prevent window focus triggers
+    storage: customStorage,
+    // Disable debug mode to reduce unnecessary events
+    debug: false
   },
   global: {
     headers: {
@@ -39,6 +55,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 })
 
 console.log('Supabase client initialized successfully');
+console.log('Email redirect URL:', config.emailRedirectUrl);
 
 // Types for our database schema
 export interface Database {

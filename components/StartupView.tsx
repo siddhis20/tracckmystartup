@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Startup, NewInvestment, InvestmentOffer } from '../types';
 import Card from './ui/Card';
 import Button from './ui/Button';
+import Input from './ui/Input';
 import AddStartupModal from './AddStartupModal';
 import { 
   Building2, 
@@ -14,7 +15,8 @@ import {
   Plus,
   Upload,
   Settings,
-  Menu
+  Menu,
+  Share2
 } from 'lucide-react';
 
 interface StartupViewProps {
@@ -37,9 +39,19 @@ const StartupView: React.FC<StartupViewProps> = ({
   const [selectedTab, setSelectedTab] = useState<'overview' | 'investments' | 'offers' | 'documents'>('overview');
   const [isAddStartupModalOpen, setIsAddStartupModalOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Since we're now filtering by user_id in the database, all startups returned are for the current user
   const userStartups = startups;
+
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const filteredStartups = normalizedQuery
+    ? userStartups.filter((s) =>
+        [s.name, s.sector]
+          .filter(Boolean)
+          .some((field) => String(field).toLowerCase().includes(normalizedQuery))
+      )
+    : userStartups;
 
   // Auto-select the first startup for startup users
   React.useEffect(() => {
@@ -61,6 +73,30 @@ const StartupView: React.FC<StartupViewProps> = ({
   const averageValuation = userStartups.length > 0 
     ? userStartups.reduce((sum, startup) => sum + startup.current_valuation, 0) / userStartups.length 
     : 0;
+
+  const handleShare = async (startup: Startup) => {
+    const details = `Startup: ${startup.name}\nSector: ${startup.sector}\nValuation: ₹${startup.current_valuation}L\nFunding: ₹${startup.total_funding}L\nRevenue: ₹${startup.total_revenue}L`;
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: startup.name, text: details });
+      } else if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(details);
+        alert('Startup details copied to clipboard');
+      } else {
+        // Fallback: hidden textarea copy
+        const textarea = document.createElement('textarea');
+        textarea.value = details;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        alert('Startup details copied to clipboard');
+      }
+    } catch (err) {
+      console.error('Share failed', err);
+      alert('Unable to share. Try copying manually.');
+    }
+  };
 
   return (
     <div className="space-y-4 sm:space-y-6 px-4 sm:px-6 lg:px-8">
@@ -257,6 +293,17 @@ const StartupView: React.FC<StartupViewProps> = ({
         {selectedTab === 'overview' && (
           <div className="space-y-4 sm:space-y-6">
             <h2 className="text-lg sm:text-xl font-semibold text-slate-900">Your Startups</h2>
+            {userStartups.length > 0 && (
+              <div className="flex items-center">
+                <Input
+                  id="startup-search"
+                  name="startup-search"
+                  placeholder="Search by name or sector"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
+            )}
             {userStartups.length === 0 ? (
               <Card className="p-6 sm:p-8 text-center">
                 <Building2 className="h-10 w-10 sm:h-12 sm:w-12 text-slate-400 mx-auto mb-4" />
@@ -267,9 +314,15 @@ const StartupView: React.FC<StartupViewProps> = ({
                   Add Your First Startup
                 </Button>
               </Card>
+            ) : filteredStartups.length === 0 ? (
+              <Card className="p-6 sm:p-8 text-center">
+                <Building2 className="h-10 w-10 sm:h-12 sm:w-12 text-slate-400 mx-auto mb-4" />
+                <h3 className="text-base sm:text-lg font-medium text-slate-900 mb-2">No matches</h3>
+                <p className="text-sm sm:text-base text-slate-600">Try a different keyword.</p>
+              </Card>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-                {userStartups.map((startup) => (
+                {filteredStartups.map((startup) => (
                   <Card key={startup.id} className="p-4 sm:p-6 hover:shadow-lg transition-shadow">
                     <div className="flex justify-between items-start mb-3 sm:mb-4">
                       <div className="flex-1 min-w-0">
@@ -302,14 +355,25 @@ const StartupView: React.FC<StartupViewProps> = ({
                       </div>
                     </div>
                     
-                    <Button 
-                      onClick={() => onViewStartup(startup)}
-                      className="w-full flex items-center justify-center gap-2"
-                      size="sm"
-                    >
-                      <Eye className="h-4 w-4" />
-                      View Details
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button 
+                        onClick={() => onViewStartup(startup)}
+                        className="flex-1 flex items-center justify-center gap-2"
+                        size="sm"
+                      >
+                        <Eye className="h-4 w-4" />
+                        View
+                      </Button>
+                      <Button 
+                        variant="outline"
+                        onClick={() => handleShare(startup)}
+                        className="flex-1 flex items-center justify-center gap-2"
+                        size="sm"
+                      >
+                        <Share2 className="h-4 w-4" />
+                        Share
+                      </Button>
+                    </div>
                   </Card>
                 ))}
               </div>

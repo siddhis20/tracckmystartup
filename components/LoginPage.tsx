@@ -43,11 +43,12 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onNavigateToRegister, on
                 console.log('User authenticated:', user.email);
                 
                 // Check if user needs to complete Form 2 (document upload)
-                const { data: profile, error: profileError } = await authService.supabase
+                const { data: profiles, error: profileError } = await authService.supabase
                     .from('users')
                     .select('government_id, ca_license')
-                    .eq('id', user.id)
-                    .single();
+                    .eq('id', user.id);
+                
+                const profile = profiles && profiles.length > 0 ? profiles[0] : null;
                 
                 console.log('Profile check result:', { 
                     profile, 
@@ -105,19 +106,24 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onNavigateToRegister, on
     return (
         <div className="w-full flex flex-col items-center">
             {onNavigateToLanding && (
-                <div className="w-full max-w-md mx-auto mb-4">
+                <div className="w-full max-w-md mb-4 flex justify-start">
                     <button
                         onClick={onNavigateToLanding}
                         className="text-sm text-slate-500 hover:text-slate-700 underline"
-                        aria-label="Back to Landing"
+                        aria-label="Back"
                     >
-                        ← Back to Landing
+                        ← Back
                     </button>
                 </div>
             )}
             <Card className="w-full max-w-md">
                 <div className="text-center mb-8">
-                    <img src={LogoTMS} alt="TrackMyStartup" className="mx-auto h-40 w-40    " />
+                    <img 
+                      src={LogoTMS} 
+                      alt="TrackMyStartup" 
+                      className="mx-auto h-40 w-40 cursor-pointer hover:opacity-80 transition-opacity" 
+                      onClick={onNavigateToLanding}
+                    />
                     <h2 className="mt-4 text-3xl font-bold tracking-tight text-slate-900">Sign in to your account</h2>
                     <p className="mt-2 text-sm text-slate-600">
                         Or{' '}

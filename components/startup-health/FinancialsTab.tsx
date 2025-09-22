@@ -7,6 +7,7 @@ import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import Select from '../ui/Select';
+import DateInput from '../DateInput';
 import { Edit, Plus, Upload, Download, Trash2 } from 'lucide-react';
 
 interface FinancialsTabProps {
@@ -15,11 +16,13 @@ interface FinancialsTabProps {
   isViewOnly?: boolean;
 }
 
-import { formatIndianCurrency, formatIndianCurrencyCompact } from '../../lib/currencyUtils';
+import { formatCurrency, formatCurrencyCompact } from '../../lib/utils';
+import { useStartupCurrency } from '../../lib/hooks/useStartupCurrency';
 
 const COLORS = ['#1e40af', '#1d4ed8', '#3b82f6', '#16a34a', '#dc2626', '#ea580c', '#7c3aed', '#059669', '#d97706', '#be123c'];
 
 const FinancialsTab: React.FC<FinancialsTabProps> = ({ startup, userRole, isViewOnly = false }) => {
+  const startupCurrency = useStartupCurrency(startup);
   const [filters, setFilters] = useState<FinancialFilters>({ 
     entity: 'all', 
     year: 'all' // Changed from new Date().getFullYear() to 'all' to show all years by default
@@ -179,14 +182,15 @@ const FinancialsTab: React.FC<FinancialsTabProps> = ({ startup, userRole, isView
       // Process investment records to create funding sources
       const sources = ['Revenue']; // Default option
       investmentRecords.forEach(investment => {
-        sources.push(`${investment.investorName} (${investment.investorType})`);
+        // Use only the investor name without the type suffix to match cap table entries
+        sources.push(investment.investorName);
       });
       setFundingSources(sources);
       
       console.log('💰 Funding Sources Created:', {
         totalInvestors: investmentRecords.length,
         fundingSources: sources,
-        sampleInvestors: investmentRecords.slice(0, 3).map(inv => `${inv.investorName} (${inv.investorType})`)
+        sampleInvestors: investmentRecords.slice(0, 3).map(inv => inv.investorName)
       });
     } catch (error) {
       console.error('❌ Error loading financial data:', error);
@@ -466,19 +470,19 @@ const FinancialsTab: React.FC<FinancialsTabProps> = ({ startup, userRole, isView
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <Card>
           <p className="text-sm font-medium text-slate-500">Total Funding Received</p>
-          <p className="text-2xl font-bold">{formatIndianCurrencyCompact(startup.totalFunding)}</p>
+          <p className="text-2xl font-bold">{formatCurrencyCompact(startup.totalFunding, startupCurrency)}</p>
         </Card>
         <Card>
           <p className="text-sm font-medium text-slate-500">Total Revenue Till Date</p>
-          <p className="text-2xl font-bold">{formatIndianCurrencyCompact(summary?.total_revenue || 0)}</p>
+          <p className="text-2xl font-bold">{formatCurrencyCompact(summary?.total_revenue || 0, startupCurrency)}</p>
         </Card>
         <Card>
           <p className="text-sm font-medium text-slate-500">Total Expenditure Till Date</p>
-          <p className="text-2xl font-bold">{formatIndianCurrencyCompact(summary?.total_expenses || 0)}</p>
+          <p className="text-2xl font-bold">{formatCurrencyCompact(summary?.total_expenses || 0, startupCurrency)}</p>
         </Card>
         <Card>
             <p className="text-sm font-medium text-slate-500">Total Available Fund</p>
-          <p className="text-2xl font-bold">{formatIndianCurrencyCompact((summary?.total_revenue || 0) - (summary?.total_expenses || 0))}</p>
+          <p className="text-2xl font-bold">{formatCurrencyCompact((summary?.total_revenue || 0) - (summary?.total_expenses || 0), startupCurrency)}</p>
             <p className="text-xs text-slate-400">Total Revenue - Total Expenditure</p>
         </Card>
       </div>
@@ -529,8 +533,8 @@ const FinancialsTab: React.FC<FinancialsTabProps> = ({ startup, userRole, isView
               <LineChart data={monthlyData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="month_name" fontSize={12}/>
-                <YAxis fontSize={12} tickFormatter={(val) => formatIndianCurrencyCompact(val)}/>
-                <Tooltip formatter={(val: number) => formatIndianCurrency(val)} />
+                <YAxis fontSize={12} tickFormatter={(val) => formatCurrencyCompact(val, startupCurrency)}/>
+                <Tooltip formatter={(val: number) => formatCurrency(val, startupCurrency)} />
                 <Legend wrapperStyle={{fontSize: "14px"}}/>
                 <Line type="monotone" dataKey="revenue" stroke="#16a34a" />
               </LineChart>
@@ -544,8 +548,8 @@ const FinancialsTab: React.FC<FinancialsTabProps> = ({ startup, userRole, isView
               <LineChart data={monthlyData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="month_name" fontSize={12}/>
-                <YAxis fontSize={12} tickFormatter={(val) => formatIndianCurrencyCompact(val)}/>
-                <Tooltip formatter={(val: number) => formatIndianCurrency(val)} />
+                <YAxis fontSize={12} tickFormatter={(val) => formatCurrencyCompact(val, startupCurrency)}/>
+                <Tooltip formatter={(val: number) => formatCurrency(val, startupCurrency)} />
                 <Legend wrapperStyle={{fontSize: "14px"}}/>
                 <Line type="monotone" dataKey="expenses" stroke="#dc2626" />
               </LineChart>
@@ -562,7 +566,7 @@ const FinancialsTab: React.FC<FinancialsTabProps> = ({ startup, userRole, isView
                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                    ))}
                  </Pie>
-                 <Tooltip formatter={(val: number) => formatIndianCurrency(val)} />
+                 <Tooltip formatter={(val: number) => formatCurrency(val, startupCurrency)} />
                  <Legend layout="vertical" align="left" verticalAlign="middle" />
                </PieChart>
              </ResponsiveContainer>
@@ -578,7 +582,7 @@ const FinancialsTab: React.FC<FinancialsTabProps> = ({ startup, userRole, isView
                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                    ))}
                  </Pie>
-                 <Tooltip formatter={(val: number) => formatIndianCurrency(val)} />
+                 <Tooltip formatter={(val: number) => formatCurrency(val, startupCurrency)} />
                  <Legend layout="vertical" align="left" verticalAlign="middle" />
                </PieChart>
              </ResponsiveContainer>
@@ -611,14 +615,15 @@ const FinancialsTab: React.FC<FinancialsTabProps> = ({ startup, userRole, isView
 
             {/* Form Fields */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Input 
-                label="Date" 
+              <DateInput 
+                label="Transaction Date" 
                 id="date" 
                 name="date"
-                type="date" 
                 value={formState.date}
                 onChange={handleInputChange}
                 required
+                fieldName="Transaction date"
+                maxYearsPast={10}
               />
               <Select 
                 label="Entity" 
@@ -788,7 +793,7 @@ const FinancialsTab: React.FC<FinancialsTabProps> = ({ startup, userRole, isView
                   {expenses.map(expense => (
                     <tr key={expense.id} className="border-b">
                       <td className="py-2">{expense.vertical}</td>
-                      <td className="py-2">{formatIndianCurrency(expense.amount)}</td>
+                      <td className="py-2">{formatCurrency(expense.amount, startupCurrency)}</td>
                       <td className="py-2">
                         <div className="flex gap-2">
                           {expense.attachmentUrl && (
@@ -832,7 +837,7 @@ const FinancialsTab: React.FC<FinancialsTabProps> = ({ startup, userRole, isView
                   {revenues.map(revenue => (
                     <tr key={revenue.id} className="border-b">
                       <td className="py-2">{revenue.vertical}</td>
-                      <td className="py-2">{formatIndianCurrency(revenue.earnings)}</td>
+                      <td className="py-2">{formatCurrency(revenue.earnings, startupCurrency)}</td>
                       <td className="py-2">
                         <div className="flex gap-2">
                           {revenue.attachmentUrl && (

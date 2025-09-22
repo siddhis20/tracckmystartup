@@ -3,15 +3,36 @@ import Card from './ui/Card';
 import Button from './ui/Button';
 import Input from './ui/Input';
 import { UserRole } from '../types';
-import { FileText, Users, CheckCircle } from 'lucide-react';
+import { FileText, Users, CheckCircle, Building2, Globe, PieChart, Plus, Trash2 } from 'lucide-react';
 import LogoTMS from './public/logoTMS.svg';
 import { authService } from '../lib/auth';
 import { storageService } from '../lib/storage';
+import { complianceRulesComprehensiveService } from '../lib/complianceRulesComprehensiveService';
+import { userComplianceService, CountryComplianceInfo } from '../lib/userComplianceService';
+import { getCurrencyForCountry } from '../lib/utils';
 
 interface Founder {
   id: string;
   name: string;
   email: string;
+  shares?: number;
+  equity?: number;
+}
+
+interface Subsidiary {
+  id: string;
+  country: string;
+  companyType: string;
+  registrationDate: string;
+  caCode?: string;
+  csCode?: string;
+}
+
+interface InternationalOp {
+  id: string;
+  country: string;
+  companyType: string;
+  startDate: string;
 }
 
 interface CompleteRegistrationPageProps {
@@ -24,25 +45,205 @@ export const CompleteRegistrationPage: React.FC<CompleteRegistrationPageProps> =
   onNavigateToDashboard
 }) => {
   const [userData, setUserData] = useState<any>(null);
+  const [countryComplianceInfo, setCountryComplianceInfo] = useState<CountryComplianceInfo[]>([]);
+  const [selectedCountryInfo, setSelectedCountryInfo] = useState<CountryComplianceInfo | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<{
     govId: File | null;
     roleSpecific: File | null;
+    license?: File | null;
+    logo?: File | null;
   }>({
     govId: null,
-    roleSpecific: null
+    roleSpecific: null,
+    license: null,
+    logo: null
   });
 
   const [founders, setFounders] = useState<Founder[]>([
-    { id: '1', name: '', email: '' }
+    { id: '1', name: '', email: '', shares: 0, equity: 0 }
   ]);
+
+  // Profile information
+  const [profileData, setProfileData] = useState({
+    country: 'United States',
+    companyType: 'C-Corporation',
+    registrationDate: new Date().toISOString().split('T')[0],
+    caServiceCode: '',
+    csServiceCode: '',
+    currency: 'USD',
+  });
+
+  // Share and equity information
+  const [shareData, setShareData] = useState({
+    totalShares: 1000000,
+    pricePerShare: 0.01,
+    esopReservedShares: 100000
+  });
+
+  // Subsidiaries and international operations
+  const [subsidiaries, setSubsidiaries] = useState<Subsidiary[]>([]);
+  const [internationalOps, setInternationalOps] = useState<InternationalOp[]>([]);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isCheckingUser, setIsCheckingUser] = useState(true);
+  const [isInitialized, setIsInitialized] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  
+  // Admin-managed compliance rules for company types
+  const [rulesMap, setRulesMap] = useState<any>({});
+  const [allCountries, setAllCountries] = useState<string[]>([]);
+
+  // Compute company types for the currently selected country from admin-managed rules
+  const companyTypesByCountry = React.useMemo<string[]>(() => {
+    const countryRules = rulesMap[profileData.country] || rulesMap['default'] || {};
+    const keys = Object.keys(countryRules).filter(k => k !== 'default');
+    return keys.length > 0 ? keys : (countryRules['default'] ? ['default'] : []);
+  }, [rulesMap, profileData.country]);
 
   useEffect(() => {
     checkUserAndRedirect();
   }, []);
+
+  // Set initialized flag after component mounts to prevent automatic calculations during initial render
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setIsInitialized(true);
+    }, 100); // Small delay to ensure all initial state is set
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Load admin-managed compliance rules for company types
+  useEffect(() => {
+    const loadComplianceRules = async () => {
+      try {
+        const rules = await complianceRulesComprehensiveService.getAllRules();
+        const map: any = {};
+        const countries: string[] = [];
+        
+        rules.forEach(rule => { 
+          if (!map[rule.country_code]) {
+            map[rule.country_code] = {};
+          }
+          if (!map[rule.country_code][rule.company_type]) {
+            map[rule.country_code][rule.company_type] = [];
+          }
+          map[rule.country_code][rule.company_type].push({
+            id: rule.id,
+            name: rule.compliance_name,
+            description: rule.compliance_description,
+            frequency: rule.frequency,
+            verification_required: rule.verification_required
+          });
+          
+          if (rule.country_code && rule.country_code !== 'default' && !countries.includes(rule.country_code)) {
+            countries.push(rule.country_code);
+          }
+        });
+        
+        setRulesMap(map);
+        setAllCountries(countries.sort());
+      } catch (error) {
+        console.error('Error loading compliance rules:', error);
+      }
+    };
+
+    const loadCountryComplianceInfo = async () => {
+      try {
+        const countries = await userComplianceService.getAvailableCountries();
+        setCountryComplianceInfo(countries);
+      } catch (error) {
+        console.error('Error loading country compliance info:', error);
+      }
+    };
+
+    loadComplianceRules();
+    loadCountryComplianceInfo();
+  }, []);
+
+  // Auto-update company type when country changes
+  useEffect(() => {
+    if (profileData.country && profileData.companyType) {
+      const validTypes = companyTypesByCountry;
+      if (validTypes.length > 0 && !validTypes.includes(profileData.companyType)) {
+        console.log(`🔧 Auto-updating company type: ${profileData.companyType} -> ${validTypes[0]} for country: ${profileData.country}`);
+        setProfileData(prev => ({
+          ...prev,
+          companyType: validTypes[0]
+        }));
+      }
+    }
+  }, [profileData.country, companyTypesByCountry]);
+
+  // Auto-update currency when country changes
+  useEffect(() => {
+    if (profileData.country) {
+      const currency = getCurrencyForCountry(profileData.country);
+      if (currency && currency !== profileData.currency) {
+        console.log(`🔧 Auto-updating currency: ${profileData.currency} -> ${currency} for country: ${profileData.country}`);
+        setProfileData(prev => ({
+          ...prev,
+          currency: currency
+        }));
+      }
+    }
+  }, [profileData.country]);
+
+  // Auto-update CA/CS types when country changes
+  useEffect(() => {
+    if (profileData.country && countryComplianceInfo.length > 0) {
+      // Find country info by country name
+      const countryInfo = countryComplianceInfo.find(c => c.country_name === profileData.country);
+      if (countryInfo) {
+        setSelectedCountryInfo(countryInfo);
+        // Update profile data with CA/CS codes
+        setProfileData(prev => ({
+          ...prev,
+          caServiceCode: countryInfo.ca_type || '',
+          csServiceCode: countryInfo.cs_type || ''
+        }));
+        console.log(`🔧 Auto-updating CA/CS types for country: ${profileData.country}`, countryInfo);
+      } else {
+        // If not found by name, try to find by country code mapping
+        const countryCodeMap: { [key: string]: string } = {
+          'United States': 'US',
+          'India': 'IN',
+          'United Kingdom': 'GB',
+          'Canada': 'CA',
+          'Australia': 'AU',
+          'Germany': 'DE',
+          'France': 'FR',
+          'Singapore': 'SG',
+          'Japan': 'JP',
+          'China': 'CN',
+          'Brazil': 'BR',
+          'Mexico': 'MX',
+          'South Africa': 'ZA',
+          'Nigeria': 'NG',
+          'Kenya': 'KE',
+          'Egypt': 'EG',
+          'UAE': 'AE',
+          'Saudi Arabia': 'SA',
+          'Israel': 'IL'
+        };
+        
+        const countryCode = countryCodeMap[profileData.country];
+        if (countryCode) {
+          const countryInfoByCode = countryComplianceInfo.find(c => c.country_code === countryCode);
+          if (countryInfoByCode) {
+            setSelectedCountryInfo(countryInfoByCode);
+            // Update profile data with CA/CS codes
+            setProfileData(prev => ({
+              ...prev,
+              caServiceCode: countryInfoByCode.ca_type || '',
+              csServiceCode: countryInfoByCode.cs_type || ''
+            }));
+            console.log(`🔧 Auto-updating CA/CS types for country: ${profileData.country} (code: ${countryCode})`, countryInfoByCode);
+          }
+        }
+      }
+    }
+  }, [profileData.country, countryComplianceInfo]);
 
   const checkUserAndRedirect = async () => {
     try {
@@ -96,7 +297,7 @@ export const CompleteRegistrationPage: React.FC<CompleteRegistrationPageProps> =
 
   const addFounder = () => {
     const newId = (founders.length + 1).toString();
-    setFounders(prev => [...prev, { id: newId, name: '', email: '' }]);
+    setFounders(prev => [...prev, { id: newId, name: '', email: '', shares: 0, equity: 0 }]);
   };
 
   const removeFounder = (id: string) => {
@@ -105,9 +306,88 @@ export const CompleteRegistrationPage: React.FC<CompleteRegistrationPageProps> =
     }
   };
 
-  const updateFounder = (id: string, field: 'name' | 'email', value: string) => {
+  const updateFounder = (id: string, field: 'name' | 'email' | 'shares' | 'equity', value: string | number) => {
     setFounders(prev => prev.map(founder => 
       founder.id === id ? { ...founder, [field]: value } : founder
+    ));
+  };
+
+  // Subsidiary management
+  const addSubsidiary = () => {
+    const newId = (subsidiaries.length + 1).toString();
+    setSubsidiaries(prev => [...prev, { 
+      id: newId, 
+      country: '', 
+      companyType: '', 
+      registrationDate: '',
+      caCode: '',
+      csCode: ''
+    }]);
+  };
+
+  const removeSubsidiary = (id: string) => {
+    setSubsidiaries(prev => prev.filter(s => s.id !== id));
+  };
+
+  const updateSubsidiary = (id: string, field: keyof Subsidiary, value: string) => {
+    setSubsidiaries(prev => prev.map(s => 
+      s.id === id ? { ...s, [field]: value } : s
+    ));
+  };
+
+  // Handle country selection and auto-populate CA/CS types
+  const handleCountrySelection = async (countryCode: string) => {
+    const countryInfo = countryComplianceInfo.find(c => c.country_code === countryCode);
+    if (countryInfo) {
+      setSelectedCountryInfo(countryInfo);
+      
+      // Auto-select currency based on country
+      const autoSelectedCurrency = getCurrencyForCountryCode(countryCode);
+      
+      // Auto-populate CA and CS types in profile data
+      setProfileData(prev => ({
+        ...prev,
+        country: countryCode,
+        currency: autoSelectedCurrency, // Auto-select currency based on country
+        caServiceCode: countryInfo.ca_type || '',
+        csServiceCode: countryInfo.cs_type || ''
+      }));
+    }
+  };
+
+  // Handle subsidiary country selection
+  const handleSubsidiaryCountrySelection = async (subsidiaryId: string, countryCode: string) => {
+    const countryInfo = countryComplianceInfo.find(c => c.country_code === countryCode);
+    if (countryInfo) {
+      setSubsidiaries(prev => prev.map(s => 
+        s.id === subsidiaryId ? { 
+          ...s, 
+          country: countryCode,
+          caCode: countryInfo.ca_type || '',
+          csCode: countryInfo.cs_type || ''
+        } : s
+      ));
+    }
+  };
+
+  // International operations management
+  const addInternationalOp = () => {
+    const newId = (internationalOps.length + 1).toString();
+    setInternationalOps(prev => [...prev, { 
+      id: newId, 
+      country: '', 
+      companyType: '', 
+      startDate: ''
+    }]);
+  };
+
+  const removeInternationalOp = (id: string) => {
+    setInternationalOps(prev => prev.filter(op => op.id !== id));
+  };
+
+  const updateInternationalOp = (id: string, field: keyof InternationalOp, value: string) => {
+    setInternationalOps(prev => prev.map(op => 
+      op.id === id ? { ...op, [field]: value } : op
     ));
   };
 
@@ -118,6 +398,7 @@ export const CompleteRegistrationPage: React.FC<CompleteRegistrationPageProps> =
       case 'CA': return 'Copy of CA License';
       case 'CS': return 'Copy of CS License';
       case 'Startup Facilitation Center': return 'Proof of Organization Registration';
+      case 'Investment Advisor': return 'Proof of Firm Registration';
       default: return 'Document';
     }
   };
@@ -128,6 +409,12 @@ export const CompleteRegistrationPage: React.FC<CompleteRegistrationPageProps> =
     setError(null);
 
     // Validation
+    if (!profileData.country) {
+      setError('Country selection is required');
+      setIsLoading(false);
+      return;
+    }
+
     if (!uploadedFiles.govId) {
       setError('Government ID is required');
       setIsLoading(false);
@@ -140,10 +427,66 @@ export const CompleteRegistrationPage: React.FC<CompleteRegistrationPageProps> =
       return;
     }
 
+    // For Investment Advisors, license and logo are required
+    if (userData.role === 'Investment Advisor') {
+      if (!uploadedFiles.license) {
+        setError('License (As per country regulations) is required for Investment Advisors');
+        setIsLoading(false);
+        return;
+      }
+      if (!uploadedFiles.logo) {
+        setError('Company logo is required for Investment Advisors');
+        setIsLoading(false);
+        return;
+      }
+    }
+
     if (userData.role === 'Startup') {
       const invalidFounders = founders.filter(f => !f.name.trim() || !f.email.trim());
       if (invalidFounders.length > 0) {
         setError('Please fill in all founder details');
+        setIsLoading(false);
+        return;
+      }
+
+      // Validate that all founders have shares specified
+      const foundersWithoutShares = founders.filter(f => !f.shares || f.shares <= 0);
+      if (foundersWithoutShares.length > 0) {
+        setError('Please specify the number of shares for all founders');
+        setIsLoading(false);
+        return;
+      }
+
+      // Validate share data
+      if (shareData.totalShares <= 0 || shareData.pricePerShare <= 0) {
+        setError('Please enter valid share information');
+        setIsLoading(false);
+        return;
+      }
+
+      // Validate that founder shares don't exceed total shares
+      const totalFounderShares = founders.reduce((sum, founder) => sum + (founder.shares || 0), 0);
+      const esopReservedShares = shareData.esopReservedShares || 0;
+      const totalAllocatedShares = totalFounderShares + esopReservedShares;
+      
+      if (totalAllocatedShares > shareData.totalShares) {
+        setError(`Total allocated shares (${totalAllocatedShares.toLocaleString()}) exceeds total shares (${shareData.totalShares.toLocaleString()}). Please adjust founder shares or ESOP reserved shares.`);
+        setIsLoading(false);
+        return;
+      }
+
+      // Validate that total founder equity doesn't exceed 100%
+      const totalFounderEquity = founders.reduce((sum, founder) => sum + (founder.equity || 0), 0);
+      if (totalFounderEquity > 100) {
+        setError(`Total founder equity (${totalFounderEquity.toFixed(1)}%) exceeds 100%. Please adjust founder equity percentages.`);
+        setIsLoading(false);
+        return;
+      }
+
+      // Validate that all founders have equity specified
+      const foundersWithoutEquity = founders.filter(f => !f.equity || f.equity <= 0);
+      if (foundersWithoutEquity.length > 0) {
+        setError('Please specify equity percentage for all founders');
         setIsLoading(false);
         return;
       }
@@ -187,24 +530,70 @@ export const CompleteRegistrationPage: React.FC<CompleteRegistrationPageProps> =
         }
       }
 
-      console.log('📊 Upload results:', { governmentIdUrl, roleSpecificUrl });
+      // Upload additional files for Investment Advisors
+      let licenseUrl = '';
+      let logoUrl = '';
+
+      if (userData.role === 'Investment Advisor') {
+        if (uploadedFiles.license) {
+          console.log('📤 Uploading license document...');
+          const result = await storageService.uploadVerificationDocument(
+            uploadedFiles.license, 
+            userData.email, 
+            'license'
+          );
+          if (result.success && result.url) {
+            licenseUrl = result.url;
+            console.log('✅ License document uploaded successfully:', licenseUrl);
+          } else {
+            console.error('❌ License document upload failed:', result);
+          }
+        }
+
+        if (uploadedFiles.logo) {
+          console.log('📤 Uploading company logo...');
+          const result = await storageService.uploadVerificationDocument(
+            uploadedFiles.logo, 
+            userData.email, 
+            'logo'
+          );
+          if (result.success && result.url) {
+            logoUrl = result.url;
+            console.log('✅ Company logo uploaded successfully:', logoUrl);
+          } else {
+            console.error('❌ Company logo upload failed:', result);
+          }
+        }
+      }
+
+      console.log('📊 Upload results:', { governmentIdUrl, roleSpecificUrl, licenseUrl, logoUrl });
 
       // Update user profile with documents
+      const verificationDocuments = [governmentIdUrl, roleSpecificUrl];
+      if (licenseUrl) verificationDocuments.push(licenseUrl);
+      if (logoUrl) verificationDocuments.push(logoUrl);
+
       console.log('💾 Updating user profile in database...', {
         userId: userData.id,
         governmentId: governmentIdUrl,
         caLicense: roleSpecificUrl,
-        verificationDocuments: [governmentIdUrl, roleSpecificUrl]
+        verificationDocuments: verificationDocuments
       });
+
+      const updateData: any = {
+          government_id: governmentIdUrl,
+          ca_license: roleSpecificUrl,
+          verification_documents: verificationDocuments,
+          // Add Investment Advisor specific fields
+          logo_url: logoUrl || null,
+          financial_advisor_license_url: licenseUrl || null,
+          updated_at: new Date().toISOString()
+      };
+
 
       const { error: updateError } = await authService.supabase
         .from('users')
-        .update({
-          government_id: governmentIdUrl,
-          ca_license: roleSpecificUrl,
-          verification_documents: [governmentIdUrl, roleSpecificUrl],
-          updated_at: new Date().toISOString()
-        })
+        .update(updateData)
         .eq('id', userData.id);
 
       if (updateError) {
@@ -214,37 +603,176 @@ export const CompleteRegistrationPage: React.FC<CompleteRegistrationPageProps> =
 
       console.log('✅ User profile updated successfully in database');
 
-      // If user is a startup, create startup and founders
+      // If user is a startup, create startup and founders with comprehensive data
       if (userData.role === 'Startup') {
         try {
-          const { data: startup } = await authService.supabase
+          // First, try to find existing startup for this user
+          console.log('🔍 Looking for existing startup for user:', userData.id);
+          const { data: existingStartups, error: findError } = await authService.supabase
             .from('startups')
-            .insert({
-              name: userData.startupName || `${userData.name}'s Startup`,
-              investment_type: 'Seed',
-              investment_value: 0,
-              equity_allocation: 0,
-              current_valuation: 0,
-              compliance_status: 'Pending',
-              sector: 'Technology',
-              total_funding: 0,
-              total_revenue: 0,
-              registration_date: new Date().toISOString().split('T')[0],
-              user_id: userData.id
-            })
-            .select()
-            .single();
+            .select('*')
+            .eq('user_id', userData.id);
 
-          if (startup && founders.length > 0) {
+          if (findError) {
+            console.error('❌ Error finding existing startup:', findError);
+            throw findError;
+          }
+
+          let startup;
+          if (existingStartups && existingStartups.length > 0) {
+            // Update existing startup
+            console.log('📝 Found existing startup, updating with profile data');
+            startup = existingStartups[0];
+          } else {
+            // Create new startup if none exists
+            console.log('🆕 No existing startup found, creating new one');
+            const { data: newStartup, error: createError } = await authService.supabase
+              .from('startups')
+              .insert({
+                name: userData.startupName || `${userData.name}'s Startup`,
+                investment_type: 'Seed',
+                investment_value: 0,
+                equity_allocation: 0,
+                current_valuation: 0,
+                compliance_status: 'Pending',
+                sector: 'Technology',
+                total_funding: 0,
+                total_revenue: 0,
+                registration_date: profileData.registrationDate,
+                user_id: userData.id
+              })
+              .select()
+              .single();
+
+            if (createError) {
+              console.error('❌ Error creating startup:', createError);
+              throw createError;
+            }
+            startup = newStartup;
+          }
+
+          if (startup) {
+            // Create founders with equity information
+            if (founders.length > 0) {
             const foundersData = founders.map(founder => ({
               startup_id: startup.id,
               name: founder.name,
-              email: founder.email
+              email: founder.email,
+              shares: founder.shares || 0,
+              equity_percentage: founder.equity || 0
             }));
 
-            await authService.supabase
+            console.log('💾 Saving founders data:', foundersData);
+            const { data: savedFounders, error: foundersError } = await authService.supabase
               .from('founders')
-              .insert(foundersData);
+              .insert(foundersData)
+              .select();
+            
+            if (foundersError) {
+              console.error('❌ Error saving founders:', foundersError);
+              throw foundersError;
+            }
+            console.log('✅ Founders saved successfully:', savedFounders);
+            }
+
+            // Update the startup record with comprehensive profile data
+            const startupUpdateData = {
+              country: profileData.country,
+              country_of_registration: profileData.country,
+              company_type: profileData.companyType,
+              registration_date: profileData.registrationDate,
+              ca_service_code: profileData.caServiceCode || null,
+              cs_service_code: profileData.csServiceCode || null,
+              currency: profileData.currency,
+              total_shares: shareData.totalShares,
+              price_per_share: shareData.pricePerShare,
+              esop_reserved_shares: shareData.esopReservedShares
+            };
+
+            console.log('💾 Updating startup with profile data:', startupUpdateData);
+            const { data: updatedStartup, error: startupUpdateError } = await authService.supabase
+              .from('startups')
+              .update(startupUpdateData)
+              .eq('id', startup.id)
+              .select();
+            
+            if (startupUpdateError) {
+              console.error('❌ Error updating startup with profile data:', startupUpdateError);
+              throw startupUpdateError;
+            }
+            console.log('✅ Startup updated with profile data successfully:', updatedStartup);
+
+            // Also save shares data to startup_shares table for Cap Table compatibility
+            console.log('💾 Syncing shares data to startup_shares table...');
+            const { data: sharesData, error: sharesError } = await authService.supabase
+              .from('startup_shares')
+              .upsert({
+                startup_id: startup.id,
+                total_shares: shareData.totalShares,
+                price_per_share: shareData.pricePerShare,
+                esop_reserved_shares: shareData.esopReservedShares
+              }, {
+                onConflict: 'startup_id'
+              })
+              .select();
+            
+            if (sharesError) {
+              console.error('❌ Error syncing shares data to startup_shares table:', sharesError);
+              // Don't throw error here as the main data is already saved to startups table
+            } else {
+              console.log('✅ Shares data synced to startup_shares table successfully:', sharesData);
+            }
+            console.log('🔍 Updated startup data for profile tab:', {
+              id: updatedStartup[0]?.id,
+              country: updatedStartup[0]?.country,
+              company_type: updatedStartup[0]?.company_type,
+              registration_date: updatedStartup[0]?.registration_date,
+              currency: updatedStartup[0]?.currency,
+              total_shares: updatedStartup[0]?.total_shares,
+              price_per_share: updatedStartup[0]?.price_per_share,
+              esop_reserved_shares: updatedStartup[0]?.esop_reserved_shares
+            });
+
+            // Shares data is already stored in the startups table above
+            console.log('✅ Shares data already stored in startups table');
+
+            // Create subsidiaries if any
+            if (subsidiaries.length > 0) {
+              const subsidiariesData = subsidiaries
+                .filter(s => s.country && s.companyType && s.registrationDate)
+                .map(subsidiary => ({
+                  startup_id: startup.id,
+                  country: subsidiary.country,
+                  company_type: subsidiary.companyType,
+                  registration_date: subsidiary.registrationDate,
+                  ca_code: subsidiary.caCode || null,
+                  cs_code: subsidiary.csCode || null
+                }));
+
+              if (subsidiariesData.length > 0) {
+                await authService.supabase
+                  .from('subsidiaries')
+                  .insert(subsidiariesData);
+              }
+            }
+
+            // Create international operations if any
+            if (internationalOps.length > 0) {
+              const internationalOpsData = internationalOps
+                .filter(op => op.country && op.companyType && op.startDate)
+                .map(op => ({
+                  startup_id: startup.id,
+                  country: op.country,
+                  company_type: op.companyType,
+                  start_date: op.startDate
+                }));
+
+              if (internationalOpsData.length > 0) {
+                await authService.supabase
+                  .from('international_operations')
+                  .insert(internationalOpsData);
+              }
+            }
           }
         } catch (error) {
           console.error('Error creating startup:', error);
@@ -332,8 +860,236 @@ export const CompleteRegistrationPage: React.FC<CompleteRegistrationPageProps> =
                   </p>
                 )}
               </div>
+
+              {/* Additional fields for Investment Advisor */}
+              {userData.role === 'Investment Advisor' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      License (As per country regulations)
+                    </label>
+                    <Input
+                      type="file"
+                      accept=".pdf,.jpg,.jpeg,.png"
+                      onChange={(e) => handleFileChange(e, 'license')}
+                      required
+                    />
+                    {uploadedFiles.license && (
+                      <p className="text-sm text-green-600 mt-1">
+                        ✓ {uploadedFiles.license.name} selected
+                      </p>
+                    )}
+                    <p className="text-xs text-slate-500 mt-1">
+                      Upload your financial advisor license (if applicable)
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Company Logo
+                    </label>
+                    <Input
+                      type="file"
+                      accept=".jpg,.jpeg,.png,.svg"
+                      onChange={(e) => handleFileChange(e, 'logo')}
+                      required
+                    />
+                    {uploadedFiles.logo && (
+                      <p className="text-sm text-green-600 mt-1">
+                        ✓ {uploadedFiles.logo.name} selected
+                      </p>
+                    )}
+                    <div className="text-xs text-slate-500 mt-1 space-y-1">
+                      <p>Upload your company logo (JPG, PNG, or SVG format)</p>
+                      <div className="bg-blue-50 p-2 rounded border border-blue-200">
+                        <p className="font-medium text-blue-800 mb-1">Logo Specifications:</p>
+                        <ul className="text-blue-700 space-y-0.5">
+                          <li>• Recommended size: 64x64 pixels (square format)</li>
+                          <li>• Maximum file size: 2MB</li>
+                          <li>• Supported formats: JPG, PNG, SVG</li>
+                          <li>• Logo will be displayed as 64x64px with white background</li>
+                          <li>• For best results, use a square logo or center your logo in a square canvas</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
+
+          {/* Country Information - For all users */}
+          <div className="space-y-4">
+            <h3 className="text-lg font-semibold text-slate-900 flex items-center">
+              <Globe className="h-5 w-5 mr-2" />
+              Country Information
+            </h3>
+            <p className="text-sm text-slate-600">
+              Select your country of operation.
+            </p>
+            
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Country</label>
+              <select
+                value={profileData.country}
+                onChange={(e) => setProfileData(prev => ({ ...prev, country: e.target.value }))}
+                className="w-full bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:ring-blue-500 focus:border-blue-500"
+                required
+              >
+                <option value="">Select Country</option>
+                <option value="United States">United States</option>
+                <option value="India">India</option>
+                <option value="United Kingdom">United Kingdom</option>
+                <option value="Canada">Canada</option>
+                <option value="Australia">Australia</option>
+                <option value="Germany">Germany</option>
+                <option value="France">France</option>
+                <option value="Singapore">Singapore</option>
+                <option value="Japan">Japan</option>
+                <option value="China">China</option>
+                <option value="Brazil">Brazil</option>
+                <option value="Mexico">Mexico</option>
+                <option value="South Africa">South Africa</option>
+                <option value="Nigeria">Nigeria</option>
+                <option value="Kenya">Kenya</option>
+                <option value="Egypt">Egypt</option>
+                <option value="UAE">UAE</option>
+                <option value="Saudi Arabia">Saudi Arabia</option>
+                <option value="Israel">Israel</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Company Profile Information - Only for Startup role */}
+          {userData.role === 'Startup' && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold text-slate-900 flex items-center">
+                <Building2 className="h-5 w-5 mr-2" />
+                Company Profile
+              </h3>
+              <p className="text-sm text-slate-600">
+                Provide your company's basic information and structure.
+              </p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Company Type</label>
+                  <select
+                    value={profileData.companyType}
+                    onChange={(e) => setProfileData(prev => ({ ...prev, companyType: e.target.value }))}
+                    className="w-full bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:ring-blue-500 focus:border-blue-500"
+                    required
+                  >
+                    {companyTypesByCountry.length > 0 ? (
+                      companyTypesByCountry.map(type => (
+                        <option key={type} value={type}>{type}</option>
+                      ))
+                    ) : (
+                      <>
+                        <option value="C-Corporation">C-Corporation</option>
+                        <option value="S-Corporation">S-Corporation</option>
+                        <option value="LLC">LLC</option>
+                        <option value="Partnership">Partnership</option>
+                        <option value="Sole Proprietorship">Sole Proprietorship</option>
+                        <option value="Private Limited">Private Limited</option>
+                        <option value="Public Limited">Public Limited</option>
+                        <option value="Other">Other</option>
+                      </>
+                    )}
+                  </select>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">Currency</label>
+                  <select
+                    value={profileData.currency}
+                    onChange={(e) => setProfileData(prev => ({ ...prev, currency: e.target.value }))}
+                    className="w-full bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:ring-blue-500 focus:border-blue-500"
+                    required
+                  >
+                    <option value="USD">USD - US Dollar</option>
+                    <option value="EUR">EUR - Euro</option>
+                    <option value="GBP">GBP - British Pound</option>
+                    <option value="INR">INR - Indian Rupee</option>
+                    <option value="CAD">CAD - Canadian Dollar</option>
+                    <option value="AUD">AUD - Australian Dollar</option>
+                    <option value="JPY">JPY - Japanese Yen</option>
+                    <option value="CHF">CHF - Swiss Franc</option>
+                    <option value="SGD">SGD - Singapore Dollar</option>
+                    <option value="CNY">CNY - Chinese Yuan</option>
+                  </select>
+                </div>
+                
+                <Input
+                  label="Registration Date"
+                  type="date"
+                  value={profileData.registrationDate}
+                  onChange={(e) => setProfileData(prev => ({ ...prev, registrationDate: e.target.value }))}
+                  required
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Share Information - Only for Startup role */}
+          {userData.role === 'Startup' && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold text-slate-900 flex items-center">
+                <PieChart className="h-5 w-5 mr-2" />
+                Share Information
+              </h3>
+              <p className="text-sm text-slate-600">
+                Define your company's share structure and equity distribution.
+              </p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Input
+                  label="Total Shares Issued"
+                  type="number"
+                  min="1"
+                  value={shareData.totalShares}
+                  onChange={(e) => {
+                    const newTotalShares = parseInt(e.target.value) || 0;
+                    setShareData(prev => ({ ...prev, totalShares: newTotalShares }));
+                    // Recalculate founder equity percentages when total shares change (only after initialization)
+                    if (isInitialized && newTotalShares > 0) {
+                      setFounders(prev => prev.map(founder => {
+                        if (founder.shares > 0) {
+                          const equityPercentage = (founder.shares / newTotalShares) * 100;
+                          // Round to 2 decimal places to avoid long decimal numbers
+                          const roundedEquity = Math.round(equityPercentage * 100) / 100;
+                          return { ...founder, equity: roundedEquity };
+                        }
+                        return founder;
+                      }));
+                    }
+                  }}
+                  required
+                />
+                
+                <Input
+                  label={`Price Per Share (${profileData.currency})`}
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={shareData.pricePerShare}
+                  onChange={(e) => setShareData(prev => ({ ...prev, pricePerShare: parseFloat(e.target.value) || 0 }))}
+                  required
+                />
+                
+                <Input
+                  label="ESOP Reserved Shares"
+                  type="number"
+                  min="0"
+                  value={shareData.esopReservedShares}
+                  onChange={(e) => setShareData(prev => ({ ...prev, esopReservedShares: parseInt(e.target.value) || 0 }))}
+                  required
+                />
+              </div>
+            </div>
+          )}
 
           {/* Founder Information - Only for Startup role */}
           {userData.role === 'Startup' && (
@@ -362,7 +1118,7 @@ export const CompleteRegistrationPage: React.FC<CompleteRegistrationPageProps> =
                       )}
                     </div>
                     
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                       <Input
                         label="Name"
                         value={founder.name}
@@ -376,9 +1132,110 @@ export const CompleteRegistrationPage: React.FC<CompleteRegistrationPageProps> =
                         onChange={(e) => updateFounder(founder.id, 'email', e.target.value)}
                         required
                       />
+                      <Input
+                        label="Number of Shares"
+                        type="number"
+                        min="0"
+                        value={founder.shares || 0}
+                        onChange={(e) => {
+                          const shares = parseInt(e.target.value) || 0;
+                          updateFounder(founder.id, 'shares', shares);
+                          // Auto-calculate equity percentage based on shares (only after initialization and not during updates)
+                          if (isInitialized && shareData.totalShares > 0 && !isUpdating) {
+                            setIsUpdating(true);
+                            const equityPercentage = (shares / shareData.totalShares) * 100;
+                            // Round to 2 decimal places to avoid long decimal numbers
+                            const roundedEquity = Math.round(equityPercentage * 100) / 100;
+                            updateFounder(founder.id, 'equity', roundedEquity);
+                            setTimeout(() => setIsUpdating(false), 10);
+                          }
+                        }}
+                        required
+                      />
+                      <Input
+                        label={isInitialized ? "Equity (%) (auto-calculated)" : "Equity (%)"}
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.1"
+                        value={founder.equity ? Number(founder.equity).toFixed(2) : 0}
+                        onChange={(e) => {
+                          const equity = parseFloat(e.target.value) || 0;
+                          updateFounder(founder.id, 'equity', equity);
+                          // Auto-calculate shares based on equity percentage (only after initialization and not during updates)
+                          if (isInitialized && shareData.totalShares > 0 && equity > 0 && !isUpdating) {
+                            setIsUpdating(true);
+                            const calculatedShares = (equity / 100) * shareData.totalShares;
+                            // Only update shares if the calculated value is meaningful (>= 1)
+                            if (calculatedShares >= 1) {
+                              const shares = Math.round(calculatedShares);
+                              updateFounder(founder.id, 'shares', shares);
+                            }
+                            setTimeout(() => setIsUpdating(false), 10);
+                          }
+                        }}
+                        required
+                        readOnly={false}
+                      />
                     </div>
                   </div>
                 ))}
+                
+                {/* Shares Allocation Summary */}
+                {userData.role === 'Startup' && founders.length > 0 && shareData.totalShares > 0 && (
+                  <div className="mt-4 p-4 bg-slate-50 rounded-lg border">
+                    <h4 className="text-sm font-medium text-slate-700 mb-3">Shares Allocation Summary</h4>
+                    {(() => {
+                      const totalFounderShares = founders.reduce((sum, founder) => sum + (founder.shares || 0), 0);
+                      const esopReservedShares = shareData.esopReservedShares || 0;
+                      const totalAllocatedShares = totalFounderShares + esopReservedShares;
+                      const availableShares = shareData.totalShares - totalAllocatedShares;
+                      const isOverAllocated = totalAllocatedShares > shareData.totalShares;
+                      const totalFounderEquity = founders.reduce((sum, founder) => sum + (founder.equity || 0), 0);
+                      const esopEquityPercentage = shareData.totalShares > 0 ? (esopReservedShares / shareData.totalShares) * 100 : 0;
+                      const availableEquityPercentage = 100 - totalFounderEquity - esopEquityPercentage;
+                      
+                      return (
+                        <div className="space-y-2 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-slate-600">Total Shares:</span>
+                            <span className="font-medium">{shareData.totalShares.toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-600">Founder Shares:</span>
+                            <span className={totalFounderShares > shareData.totalShares ? "text-red-600 font-medium" : "text-slate-700"}>
+                              {totalFounderShares.toLocaleString()} ({totalFounderEquity.toFixed(1)}%)
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-600">ESOP Reserved:</span>
+                            <span className="text-slate-700">{esopReservedShares.toLocaleString()} ({esopEquityPercentage.toFixed(1)}%)</span>
+                          </div>
+                          <div className="flex justify-between font-medium pt-2 border-t border-slate-200">
+                            <span className="text-slate-700">Available for Investment:</span>
+                            <span className={availableShares < 0 ? "text-red-600" : availableShares === 0 ? "text-yellow-600" : "text-green-600"}>
+                              {availableShares.toLocaleString()} ({availableEquityPercentage.toFixed(1)}%)
+                            </span>
+                          </div>
+                          {isOverAllocated && (
+                            <div className="text-red-600 text-sm font-medium mt-3 p-3 bg-red-50 border border-red-200 rounded">
+                              ⚠️ Total allocated shares exceed total shares by {(totalAllocatedShares - shareData.totalShares).toLocaleString()}
+                              <br />
+                              <span className="text-xs">Please reduce founder shares or increase total shares.</span>
+                            </div>
+                          )}
+                          {totalFounderEquity > 100 && (
+                            <div className="text-red-600 text-sm font-medium mt-3 p-3 bg-red-50 border border-red-200 rounded">
+                              ⚠️ Total founder equity exceeds 100% ({totalFounderEquity.toFixed(1)}%)
+                              <br />
+                              <span className="text-xs">Please adjust founder equity percentages.</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
                 
                 <Button
                   type="button"
@@ -388,6 +1245,137 @@ export const CompleteRegistrationPage: React.FC<CompleteRegistrationPageProps> =
                 >
                   <Users className="h-4 w-4 mr-2" />
                   Add Another Founder
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Service Provider Codes - Only for Startup role */}
+          {userData.role === 'Startup' && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold text-slate-900 flex items-center">
+                <CheckCircle className="h-5 w-5 mr-2" />
+                Service Provider Codes
+              </h3>
+              <p className="text-sm text-slate-600">
+                CA and CS types are automatically determined based on your selected country.
+              </p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    CA Type (Auto-populated)
+                  </label>
+                  <input
+                    type="text"
+                    value={selectedCountryInfo?.ca_type || 'Not available for this country'}
+                    readOnly
+                    className="w-full bg-slate-50 border border-slate-300 rounded-md px-3 py-2 text-slate-600"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    CS Type (Auto-populated)
+                  </label>
+                  <input
+                    type="text"
+                    value={selectedCountryInfo?.cs_type || 'Not available for this country'}
+                    readOnly
+                    className="w-full bg-slate-50 border border-slate-300 rounded-md px-3 py-2 text-slate-600"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Subsidiaries - Only for Startup role */}
+          {userData.role === 'Startup' && (
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold text-slate-900 flex items-center">
+                <Globe className="h-5 w-5 mr-2" />
+                Subsidiaries (Optional)
+              </h3>
+              <p className="text-sm text-slate-600">
+                Add any subsidiaries or international operations.
+              </p>
+              
+              <div className="space-y-4">
+                {subsidiaries.map((subsidiary, index) => (
+                  <div key={subsidiary.id} className="p-4 border border-slate-200 rounded-md">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="font-medium text-slate-900">Subsidiary {index + 1}</h4>
+                      <button
+                        type="button"
+                        onClick={() => removeSubsidiary(subsidiary.id)}
+                        className="text-red-600 hover:text-red-800 text-sm flex items-center"
+                      >
+                        <Trash2 className="h-4 w-4 mr-1" />
+                        Remove
+                      </button>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-2">Country</label>
+                        <select
+                          value={subsidiary.country}
+                          onChange={(e) => handleSubsidiaryCountrySelection(subsidiary.id, e.target.value)}
+                          className="w-full bg-white border border-slate-300 rounded-md px-3 py-2 text-slate-900 focus:ring-blue-500 focus:border-blue-500"
+                        >
+                          <option value="">Select Country</option>
+                          {countryComplianceInfo.map(country => (
+                            <option key={country.country_code} value={country.country_code}>
+                              {country.country_name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <Input
+                        label="Company Type"
+                        value={subsidiary.companyType}
+                        onChange={(e) => updateSubsidiary(subsidiary.id, 'companyType', e.target.value)}
+                      />
+                      <Input
+                        label="Registration Date"
+                        type="date"
+                        value={subsidiary.registrationDate}
+                        onChange={(e) => updateSubsidiary(subsidiary.id, 'registrationDate', e.target.value)}
+                      />
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-2">
+                          CA Type (Auto-populated)
+                        </label>
+                        <input
+                          type="text"
+                          value={subsidiary.caCode || 'Select country first'}
+                          readOnly
+                          className="w-full bg-slate-50 border border-slate-300 rounded-md px-3 py-2 text-slate-600"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-2">
+                          CS Type (Auto-populated)
+                        </label>
+                        <input
+                          type="text"
+                          value={subsidiary.csCode || 'Select country first'}
+                          readOnly
+                          className="w-full bg-slate-50 border border-slate-300 rounded-md px-3 py-2 text-slate-600"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                
+                <Button
+                  type="button"
+                  onClick={addSubsidiary}
+                  variant="outline"
+                  className="w-full"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Subsidiary
                 </Button>
               </div>
             </div>

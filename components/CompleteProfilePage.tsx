@@ -71,6 +71,7 @@ const CompleteProfilePage: React.FC<CompleteProfilePageProps> = ({ onProfileComp
                     <option value="CA">CA</option>
                     <option value="CS">CS</option>
                     <option value="Startup Facilitation Center">Startup Facilitation Center</option>
+                    <option value="Investment Advisor">Investment Advisor</option>
                 </Select>
 
                 {error && (

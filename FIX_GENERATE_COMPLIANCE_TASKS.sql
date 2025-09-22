@@ -5,18 +5,7 @@
 --    - Subsidiaries of that startup (country, company_type, registration_date)
 -- 3) Uses compliance_rules table with fallbacks to 'default'
 
--- Helper: normalize textual country to rule country_code
-CREATE OR REPLACE FUNCTION normalize_country_code(country_text text)
-RETURNS text
-LANGUAGE sql IMMUTABLE AS $$
-  SELECT CASE
-    WHEN country_text IS NULL OR trim(country_text) = '' THEN 'default'
-    WHEN lower(country_text) IN ('in','india') THEN 'IN'
-    WHEN lower(country_text) IN ('us','usa','united states','united states of america') THEN 'US'
-    WHEN lower(country_text) IN ('uk','united kingdom','great britain','england') THEN 'UK'
-    ELSE 'default'
-  END
-$$;
+-- No normalization needed - admin dashboard controls country codes directly
 
 -- Main generator
 DROP FUNCTION IF EXISTS generate_compliance_tasks_for_startup(integer);
@@ -41,7 +30,9 @@ DECLARE
   rule_set jsonb;
   r jsonb;
   sub_rec record;
+  intl_rec record;
   sub_index integer := 0;
+  intl_index integer := 0;
 BEGIN
   -- Parent company profile
   SELECT country_of_registration, company_type, registration_date
@@ -54,7 +45,7 @@ BEGIN
 
     SELECT c.rules INTO rules_json
     FROM compliance_rules c
-    WHERE c.country_code = normalize_country_code(s_country)
+    WHERE c.country_code = s_country
     LIMIT 1;
 
     IF rules_json IS NULL THEN
@@ -111,7 +102,7 @@ BEGIN
 
     SELECT c.rules INTO rules_json
     FROM compliance_rules c
-    WHERE c.country_code = normalize_country_code(sub_rec.country)
+    WHERE c.country_code = sub_rec.country
     LIMIT 1;
 
     IF rules_json IS NULL THEN
@@ -147,6 +138,66 @@ BEGIN
         task_id := 'sub-' || (sub_index - 1) || '-' || y || '-an-' || (r ->> 'id');
         entity_identifier := 'sub-' || (sub_index - 1);
         entity_display_name := 'Subsidiary ' || sub_index || ' (' || sub_rec.country || ')';
+        task_name := r ->> 'name';
+        ca_required := COALESCE((r ->> 'caRequired')::boolean, false);
+        cs_required := COALESCE((r ->> 'csRequired')::boolean, false);
+        task_type := 'annual';
+        RETURN NEXT;
+      END LOOP;
+    END LOOP;
+  END LOOP;
+
+  -- International Operations for this startup
+  FOR intl_rec IN
+    SELECT id, country, company_type, start_date
+    FROM international_ops
+    WHERE startup_id = startup_id_param
+    ORDER BY id
+  LOOP
+    intl_index := intl_index + 1;
+    IF intl_rec.start_date IS NULL THEN CONTINUE; END IF;
+
+    reg_year := EXTRACT(YEAR FROM intl_rec.start_date);
+
+    SELECT c.rules INTO rules_json
+    FROM compliance_rules c
+    WHERE c.country_code = intl_rec.country
+    LIMIT 1;
+
+    IF rules_json IS NULL THEN
+      SELECT c.rules INTO rules_json
+      FROM compliance_rules c
+      WHERE c.country_code = 'default'
+      LIMIT 1;
+    END IF;
+
+    -- Use the company type from international operations, fallback to 'default'
+    rule_set := COALESCE(rules_json -> intl_rec.company_type, rules_json -> 'default');
+
+    IF rule_set IS NULL OR jsonb_typeof(rule_set) <> 'object' THEN
+      CONTINUE;
+    END IF;
+
+    FOR y IN reg_year..current_year LOOP
+      IF y = reg_year THEN
+        FOR r IN SELECT jsonb_array_elements(COALESCE(rule_set -> 'firstYear', '[]'::jsonb)) LOOP
+          year := y;
+          task_id := 'intl-' || (intl_index - 1) || '-' || y || '-fy-' || (r ->> 'id');
+          entity_identifier := 'intl-' || (intl_index - 1);
+          entity_display_name := 'International Operation ' || intl_index || ' (' || intl_rec.country || ')';
+          task_name := r ->> 'name';
+          ca_required := COALESCE((r ->> 'caRequired')::boolean, false);
+          cs_required := COALESCE((r ->> 'csRequired')::boolean, false);
+          task_type := 'firstYear';
+          RETURN NEXT;
+        END LOOP;
+      END IF;
+
+      FOR r IN SELECT jsonb_array_elements(COALESCE(rule_set -> 'annual', '[]'::jsonb)) LOOP
+        year := y;
+        task_id := 'intl-' || (intl_index - 1) || '-' || y || '-an-' || (r ->> 'id');
+        entity_identifier := 'intl-' || (intl_index - 1);
+        entity_display_name := 'International Operation ' || intl_index || ' (' || intl_rec.country || ')';
         task_name := r ->> 'name';
         ca_required := COALESCE((r ->> 'caRequired')::boolean, false);
         cs_required := COALESCE((r ->> 'csRequired')::boolean, false);

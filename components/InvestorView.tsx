@@ -6,8 +6,10 @@ import Badge from './ui/Badge';
 import PortfolioDistributionChart from './charts/PortfolioDistributionChart';
 import Modal from './ui/Modal';
 import Input from './ui/Input';
-import { TrendingUp, DollarSign, CheckSquare, Eye, PlusCircle, Activity, FileText, Video, Users, Heart, CheckCircle, LayoutGrid, Film, Edit, X, Clock, CheckCircle2, Shield, Menu, User, Settings, LogOut } from 'lucide-react';
+import { TrendingUp, DollarSign, CheckSquare, Eye, PlusCircle, Activity, FileText, Video, Users, Heart, CheckCircle, LayoutGrid, Film, Edit, X, Clock, CheckCircle2, Shield, Menu, User, Settings, LogOut, Star, Search, Share2 } from 'lucide-react';
 import { investorService, ActiveFundraisingStartup } from '../lib/investorService';
+import { paymentService } from '../lib/paymentService';
+import { investmentService } from '../lib/database';
 import ProfilePage from './ProfilePage';
 
 interface InvestorViewProps {
@@ -50,17 +52,55 @@ const InvestorView: React.FC<InvestorViewProps> = ({
     onCancelOffer 
 }) => {
     const formatCurrency = (value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact' }).format(value);
+
+    const handleShare = async (startup: ActiveFundraisingStartup) => {
+        console.log('Share button clicked for startup:', startup.name);
+        console.log('Startup object:', startup);
+        const videoUrl = startup.pitchVideoUrl || 'Video not available';
+        const details = `Startup: ${startup.name || 'N/A'}\nSector: ${startup.sector || 'N/A'}\nAsk: $${(startup.investmentValue || 0).toLocaleString()} for ${startup.equityAllocation || 0}% equity\nValuation: $${(startup.currentValuation || 0).toLocaleString()}\n\nPitch Video: ${videoUrl}`;
+        console.log('Share details:', details);
+        try {
+            if (navigator.share) {
+                console.log('Using native share API');
+                const shareData = {
+                    title: startup.name || 'Startup Pitch',
+                    text: details,
+                    url: videoUrl !== 'Video not available' ? videoUrl : undefined
+                };
+                await navigator.share(shareData);
+            } else if (navigator.clipboard && navigator.clipboard.writeText) {
+                console.log('Using clipboard API');
+                await navigator.clipboard.writeText(details);
+                alert('Startup details copied to clipboard');
+            } else {
+                console.log('Using fallback copy method');
+                // Fallback: hidden textarea copy
+                const textarea = document.createElement('textarea');
+                textarea.value = details;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                alert('Startup details copied to clipboard');
+            }
+        } catch (err) {
+            console.error('Share failed', err);
+            alert('Unable to share. Try copying manually.');
+        }
+    };
     
     const [isOfferModalOpen, setIsOfferModalOpen] = useState(false);
     const [selectedOpportunity, setSelectedOpportunity] = useState<ActiveFundraisingStartup | null>(null);
-    const [activeTab, setActiveTab] = useState<'dashboard' | 'reels' | 'offers'>('dashboard');
+    const [activeTab, setActiveTab] = useState<'dashboard' | 'reels' | 'offers' | 'recommendations'>('dashboard');
     const [activeFundraisingStartups, setActiveFundraisingStartups] = useState<ActiveFundraisingStartup[]>([]);
+    const [recommendedOpportunities, setRecommendedOpportunities] = useState<any[]>([]);
     const [shuffledPitches, setShuffledPitches] = useState<ActiveFundraisingStartup[]>([]);
     const [playingVideoId, setPlayingVideoId] = useState<number | null>(null);
     const [favoritedPitches, setFavoritedPitches] = useState<Set<number>>(new Set());
     const [showOnlyFavorites, setShowOnlyFavorites] = useState(false);
     const [showOnlyValidated, setShowOnlyValidated] = useState(false);
     const [isLoadingPitches, setIsLoadingPitches] = useState(false);
+    const [searchTerm, setSearchTerm] = useState('');
     
     // State for editing offers
     const [isEditOfferModalOpen, setIsEditOfferModalOpen] = useState(false);
@@ -73,11 +113,27 @@ const InvestorView: React.FC<InvestorViewProps> = ({
 
     // Profile page state (same as CA/CS)
     const [showProfilePage, setShowProfilePage] = useState(false);
+    
+    // Co-investment state management
+    const [coInvestmentListings, setCoInvestmentListings] = useState<Set<number>>(new Set());
 
     // Logout handler
     const handleLogout = () => {
       // Redirect to logout or call parent logout function
       window.location.href = '/logout';
+    };
+
+    // Co-investment handler
+    const handleSeekCoInvestors = (startupId: number) => {
+      setCoInvestmentListings(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(startupId)) {
+          newSet.delete(startupId);
+        } else {
+          newSet.add(startupId);
+        }
+        return newSet;
+      });
     };
 
     // Profile update handler
@@ -103,6 +159,22 @@ const InvestorView: React.FC<InvestorViewProps> = ({
 
         fetchActiveFundraisingStartups();
     }, []);
+
+    // Load recommended co-investment opportunities
+    useEffect(() => {
+        const loadRecommendedOpportunities = async () => {
+            if (currentUser?.id) {
+                try {
+                    const opportunities = await investmentService.getRecommendedCoInvestmentOpportunities(currentUser.id);
+                    setRecommendedOpportunities(opportunities);
+                } catch (error) {
+                    console.error('Error loading recommended opportunities:', error);
+                }
+            }
+        };
+
+        loadRecommendedOpportunities();
+    }, [currentUser?.id]);
 
     // No separate investor investments list needed; approvals drive portfolio
 
@@ -160,23 +232,29 @@ const InvestorView: React.FC<InvestorViewProps> = ({
         const form = e.currentTarget as HTMLFormElement;
         const offerAmountInput = form.elements.namedItem('offer-amount') as HTMLInputElement;
         const offerEquityInput = form.elements.namedItem('offer-equity') as HTMLInputElement;
+        const countryInput = form.elements.namedItem('country') as HTMLSelectElement;
         
         const offerAmount = Number(offerAmountInput.value);
         const equityPercentage = Number(offerEquityInput.value);
+        const country = countryInput.value;
 
         // Convert ActiveFundraisingStartup to NewInvestment format for compatibility
         const newInvestment: NewInvestment = {
             id: selectedOpportunity.id,
             name: selectedOpportunity.name,
-            sector: selectedOpportunity.sector,
+            investmentType: selectedOpportunity.investmentType || 'Seed' as any,
             investmentValue: selectedOpportunity.investmentValue,
             equityAllocation: selectedOpportunity.equityAllocation,
+            sector: selectedOpportunity.sector,
+            totalFunding: selectedOpportunity.totalFunding || 0,
+            totalRevenue: selectedOpportunity.totalRevenue || 0,
+            registrationDate: selectedOpportunity.registrationDate || new Date().toISOString().split('T')[0],
             complianceStatus: selectedOpportunity.complianceStatus,
             pitchDeckUrl: selectedOpportunity.pitchDeckUrl,
             pitchVideoUrl: selectedOpportunity.pitchVideoUrl
         };
 
-        onMakeOffer(newInvestment, offerAmount, equityPercentage);
+        onMakeOffer(newInvestment, offerAmount, equityPercentage, country, selectedOpportunity.totalFunding || 0);
         // After submitting, switch to Offers tab
         setActiveTab('offers');
         
@@ -194,6 +272,35 @@ const InvestorView: React.FC<InvestorViewProps> = ({
             }
             return newSet;
         });
+    };
+
+    const handleDueDiligenceClick = async (startup: ActiveFundraisingStartup) => {
+        if (!currentUser?.id) {
+            alert('Please log in to conduct due diligence');
+            return;
+        }
+
+        try {
+            // Create due diligence request
+            const request = await paymentService.createDueDiligenceRequest(currentUser.id, startup.id.toString());
+            
+            // Create payment intent
+            const paymentIntent = await paymentService.createPaymentIntent(
+                150, // €150 for due diligence
+                'EUR',
+                currentUser.id,
+                'due-diligence'
+            );
+
+            // Here you would integrate with your payment gateway
+            // For now, we'll simulate a successful payment
+            await paymentService.processDueDiligencePayment(request.id, paymentIntent.id);
+            
+            alert('Due diligence payment successful! You now have access to detailed startup information.');
+        } catch (error) {
+            console.error('Error processing due diligence payment:', error);
+            alert('Failed to process due diligence payment. Please try again.');
+        }
     };
 
     // Handle editing offers
@@ -246,6 +353,18 @@ const InvestorView: React.FC<InvestorViewProps> = ({
             case 'approved':
                 return 'bg-green-100 text-green-800';
             case 'rejected':
+                return 'bg-red-100 text-red-800';
+            case 'pending_investor_advisor_approval':
+                return 'bg-blue-100 text-blue-800';
+            case 'pending_startup_advisor_approval':
+                return 'bg-purple-100 text-purple-800';
+            case 'investor_advisor_approved':
+                return 'bg-green-100 text-green-800';
+            case 'startup_advisor_approved':
+                return 'bg-green-100 text-green-800';
+            case 'investor_advisor_rejected':
+                return 'bg-red-100 text-red-800';
+            case 'startup_advisor_rejected':
                 return 'bg-red-100 text-red-800';
             default:
                 return 'bg-gray-100 text-gray-800';
@@ -352,6 +471,17 @@ const InvestorView: React.FC<InvestorViewProps> = ({
                     <DollarSign className="h-5 w-5" />
                     Offers
                 </button>
+                <button
+                    onClick={() => setActiveTab('recommendations')}
+                    className={`${
+                        activeTab === 'recommendations'
+                        ? 'border-brand-primary text-brand-primary'
+                        : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                    } flex items-center gap-2 whitespace-nowrap py-3 px-1 border-b-2 font-medium text-sm transition-colors focus:outline-none`}
+                >
+                    <Star className="h-5 w-5" />
+                    Recommendations
+                </button>
             </nav>
         </div>
 
@@ -441,7 +571,19 @@ const InvestorView: React.FC<InvestorViewProps> = ({
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">{formatCurrency(startup.currentValuation)}</td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500"><Badge status={startup.complianceStatus} /></td>
                                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                            <Button size="sm" variant="outline" onClick={() => onViewStartup(startup)}><Eye className="mr-2 h-4 w-4" /> View</Button>
+                                            <div className="flex items-center justify-end gap-2">
+                                                <Button size="sm" variant="outline" onClick={() => onViewStartup(startup)}><Eye className="mr-2 h-4 w-4" /> View</Button>
+                                                <button
+                                                    onClick={() => handleSeekCoInvestors(startup.id)}
+                                                    className={`px-3 py-1 rounded-full text-xs font-medium transition-colors duration-200 ${
+                                                        coInvestmentListings.has(startup.id)
+                                                            ? 'bg-green-100 text-green-800 hover:bg-green-200'
+                                                            : 'bg-blue-100 text-blue-800 hover:bg-blue-200'
+                                                    }`}
+                                                >
+                                                    {coInvestmentListings.has(startup.id) ? 'Co-investment Listed' : 'Seek Co-Investors'}
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
@@ -464,6 +606,20 @@ const InvestorView: React.FC<InvestorViewProps> = ({
             <div className="text-center mb-6">
               <h2 className="text-2xl sm:text-3xl font-bold text-slate-800 mb-2">Discover Pitches</h2>
               <p className="text-sm text-slate-600">Watch startup videos and explore opportunities</p>
+            </div>
+            
+            {/* Search Bar */}
+            <div className="mb-6">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search startups by name or sector..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-brand-primary text-sm"
+                />
+              </div>
             </div>
             
             <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between bg-gradient-to-r from-blue-50 to-purple-50 p-4 rounded-xl border border-blue-100 gap-4">
@@ -542,6 +698,14 @@ const InvestorView: React.FC<InvestorViewProps> = ({
               const pitchesToShow = activeTab === 'reels' ? shuffledPitches : activeFundraisingStartups;
               let filteredPitches = pitchesToShow;
               
+              // Apply search filter
+              if (searchTerm.trim()) {
+                filteredPitches = filteredPitches.filter(inv => 
+                  inv.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                  inv.sector.toLowerCase().includes(searchTerm.toLowerCase())
+                );
+              }
+              
               // Apply validation filter
               if (showOnlyValidated) {
                 filteredPitches = filteredPitches.filter(inv => inv.isStartupNationValidated);
@@ -566,23 +730,27 @@ const InvestorView: React.FC<InvestorViewProps> = ({
                     <div className="max-w-sm mx-auto">
                       <Film className="h-16 w-16 text-slate-400 mx-auto mb-4" />
                       <h3 className="text-xl font-semibold text-slate-800 mb-2">
-                        {showOnlyValidated 
-                          ? 'No Verified Startups' 
-                          : showOnlyFavorites 
-                            ? 'No Favorited Pitches' 
-                            : allPitchesHaveOffers 
-                              ? 'All Offers Submitted!' 
-                              : 'No Active Fundraising'
+                        {searchTerm.trim()
+                          ? 'No Matching Startups'
+                          : showOnlyValidated 
+                            ? 'No Verified Startups' 
+                            : showOnlyFavorites 
+                              ? 'No Favorited Pitches' 
+                              : allPitchesHaveOffers 
+                                ? 'All Offers Submitted!' 
+                                : 'No Active Fundraising'
                         }
                       </h3>
                       <p className="text-slate-500">
-                        {showOnlyValidated
-                          ? 'No Startup Nation verified startups are currently fundraising. Try removing the verification filter or check back later.'
-                          : showOnlyFavorites 
-                            ? 'Start favoriting pitches to see them here.' 
-                            : allPitchesHaveOffers
-                              ? 'You\'ve submitted offers for all available startups. Check your Dashboard → Recent Activity to manage your offers.'
-                              : 'No startups are currently fundraising. Check back later for new opportunities.'
+                        {searchTerm.trim()
+                          ? 'No startups found matching your search. Try adjusting your search terms or filters.'
+                          : showOnlyValidated
+                            ? 'No Startup Nation verified startups are currently fundraising. Try removing the verification filter or check back later.'
+                            : showOnlyFavorites 
+                              ? 'Start favoriting pitches to see them here.' 
+                              : allPitchesHaveOffers
+                                ? 'You\'ve submitted offers for all available startups. Check your Dashboard → Recent Activity to manage your offers.'
+                                : 'No startups are currently fundraising. Check back later for new opportunities.'
                         }
                       </p>
                       {allPitchesHaveOffers && (
@@ -697,6 +865,15 @@ const InvestorView: React.FC<InvestorViewProps> = ({
                           <Heart className={`h-5 w-5 ${favoritedPitches.has(inv.id) ? 'fill-current' : ''}`} />
                         </Button>
 
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleShare(inv)}
+                          className="!rounded-full !p-3 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-300 transition-all duration-200 border border-slate-200"
+                        >
+                          <Share2 className="h-5 w-5" />
+                        </Button>
+
                         {inv.pitchDeckUrl && inv.pitchDeckUrl !== '#' && (
                           <a href={inv.pitchDeckUrl} target="_blank" rel="noopener noreferrer" className="flex-1">
                             <Button size="sm" variant="secondary" className="w-full hover:bg-blue-50 hover:text-blue-600 transition-all duration-200 border border-slate-200">
@@ -704,6 +881,15 @@ const InvestorView: React.FC<InvestorViewProps> = ({
                             </Button>
                           </a>
                         )}
+
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleDueDiligenceClick(inv)}
+                          className="flex-1 hover:bg-purple-50 hover:text-purple-600 hover:border-purple-300 transition-all duration-200 border border-slate-200"
+                        >
+                          <Search className="h-4 w-4 mr-2" /> Due Diligence (€150)
+                        </Button>
 
                         {(() => {
                           // Check if user has already submitted an offer for this startup
@@ -795,7 +981,7 @@ const InvestorView: React.FC<InvestorViewProps> = ({
                       </div>
                       <div className="flex items-center gap-2 flex-shrink-0">
                         <span className={`px-2 py-1 text-xs font-medium rounded-full ${getStatusColor(offer.status)}`}>
-                          {offer.status.charAt(0).toUpperCase() + offer.status.slice(1)}
+                          {offer.status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
                         </span>
                         {offer.status === 'pending' && (
                           <>
@@ -818,13 +1004,35 @@ const InvestorView: React.FC<InvestorViewProps> = ({
                           </>
                         )}
                         {(offer.status === 'accepted' || offer.status === 'completed') && (
-                          <Button 
-                            size="sm" 
-                            variant="outline"
-                            onClick={() => alert('Our team will contact you soon')}
-                          >
-                            Next Steps
-                          </Button>
+                          <div className="flex gap-2">
+                            {offer.contact_details_revealed ? (
+                              <Button 
+                                size="sm" 
+                                variant="outline"
+                                onClick={() => {
+                                  // TODO: Show contact details modal
+                                  alert('Contact details: [Startup contact information will be displayed here]');
+                                }}
+                              >
+                                View Contact Details
+                              </Button>
+                            ) : (
+                              <Button 
+                                size="sm" 
+                                variant="outline"
+                                onClick={() => alert('Contact details will be revealed once the investment advisor approves or if no advisor is assigned.')}
+                              >
+                                Contact Details Pending
+                              </Button>
+                            )}
+                            <Button 
+                              size="sm" 
+                              variant="outline"
+                              onClick={() => alert('Our team will contact you soon')}
+                            >
+                              Next Steps
+                            </Button>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -883,6 +1091,119 @@ const InvestorView: React.FC<InvestorViewProps> = ({
         </div>
       )}
 
+      {activeTab === 'recommendations' && (
+        <div className="space-y-6 animate-fade-in">
+          <Card>
+            <h3 className="text-lg font-semibold mb-4 text-slate-700 flex items-center gap-2">
+              <Star className="h-5 w-5 text-purple-600" />
+              Recommended Startups
+              <span className="text-sm font-normal text-slate-500">
+                (Recommended by your Investment Advisor)
+              </span>
+            </h3>
+            <div className="space-y-4">
+              {/* This would be populated with recommendations from Investment Advisors */}
+              <div className="text-center py-12">
+                <Star className="h-16 w-16 text-slate-400 mx-auto mb-4" />
+                <h3 className="text-lg font-semibold text-slate-800 mb-2">No Recommendations Yet</h3>
+                <p className="text-slate-500">
+                  When your Investment Advisor recommends startups to you, they will appear here.
+                </p>
+              </div>
+            </div>
+          </Card>
+          
+          {/* Co-Investment Opportunities Table */}
+          <Card>
+            <h3 className="text-lg font-semibold mb-4 text-slate-700 flex items-center gap-2">
+              <svg className="h-5 w-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+              </svg>
+              Co-Investment Opportunities
+              <span className="text-sm font-normal text-slate-500">
+                {currentUser?.investment_advisor_code ? '(Approved by your Investment Advisor)' : '(All available opportunities)'}
+              </span>
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Startup Name</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Sector</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Investment Amount</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Recommended By</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Date Recommended</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-slate-200">
+                  {recommendedOpportunities.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-6 py-4 text-center text-slate-500">
+                        No co-investment opportunities available yet
+                      </td>
+                    </tr>
+                  ) : (
+                    recommendedOpportunities.map((opportunity) => (
+                      <tr key={opportunity.recommendation_id}>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-slate-900">
+                          {opportunity.startup_name}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                          {opportunity.sector}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                          {opportunity.compliance_status}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-900">
+                          {formatCurrency(opportunity.investment_amount)}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                          {opportunity.advisor_name}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-slate-500">
+                          {new Date(opportunity.recommended_at).toLocaleDateString()}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => {
+                                // TODO: Implement due diligence request
+                                alert('Due diligence request functionality coming soon!');
+                              }}
+                              className="px-3 py-1 text-xs bg-blue-100 text-blue-800 rounded-full hover:bg-blue-200"
+                            >
+                              Due Diligence
+                            </button>
+                            <button
+                              onClick={() => {
+                                // Set the selected opportunity and open the offer modal
+                                setSelectedOpportunity({
+                                  id: opportunity.opportunity_id,
+                                  name: opportunity.startup_name,
+                                  investmentValue: opportunity.investment_amount,
+                                  equityAllocation: opportunity.equity_percentage,
+                                  totalFunding: opportunity.investment_amount
+                                });
+                                setIsOfferModalOpen(true);
+                              }}
+                              className="px-3 py-1 text-xs bg-green-100 text-green-800 rounded-full hover:bg-green-200"
+                            >
+                              Make Offer
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+      )}
+
        <Modal 
             isOpen={isOfferModalOpen} 
             onClose={() => setIsOfferModalOpen(false)} 
@@ -893,11 +1214,44 @@ const InvestorView: React.FC<InvestorViewProps> = ({
                     You are making an offer for <span className="font-semibold">{selectedOpportunity?.name}</span>. 
                     The current ask is <span className="font-semibold">{investorService.formatCurrency(selectedOpportunity?.investmentValue || 0)}</span> for <span className="font-semibold">{selectedOpportunity?.equityAllocation}%</span> equity.
                 </p>
-                <Input label="Your Investment Offer (USD)" id="offer-amount" name="offer-amount" type="number" required />
-                <Input label="Equity Requested (%)" id="offer-equity" name="offer-equity" type="number" step="0.1" required />
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Input label="Your Investment Offer (USD)" id="offer-amount" name="offer-amount" type="number" required />
+                    <Input label="Equity Requested (%)" id="offer-equity" name="offer-equity" type="number" step="0.1" required />
+                </div>
+                
+                <div>
+                    <label htmlFor="country" className="block text-sm font-medium text-slate-700 mb-1">Country</label>
+                    <select
+                        id="country"
+                        name="country"
+                        required
+                        className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                        <option value="">Select Country</option>
+                        <option value="United States">United States</option>
+                        <option value="United Kingdom">United Kingdom</option>
+                        <option value="India">India</option>
+                        <option value="Canada">Canada</option>
+                        <option value="Australia">Australia</option>
+                        <option value="Germany">Germany</option>
+                        <option value="France">France</option>
+                        <option value="Singapore">Singapore</option>
+                        <option value="Other">Other</option>
+                    </select>
+                </div>
+                
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <h4 className="text-sm font-medium text-blue-800 mb-2">Scouting Fee Information</h4>
+                    <p className="text-xs text-blue-700">
+                        When you submit this offer, you will be required to pay a startup scouting fee based on your country and the startup's funding amount. 
+                        The fee will be calculated automatically and displayed before payment confirmation.
+                    </p>
+                </div>
+                
                 <div className="flex justify-end gap-3 pt-4">
                     <Button type="button" variant="secondary" onClick={() => setIsOfferModalOpen(false)}>Cancel</Button>
-                    <Button type="submit">Submit Offer</Button>
+                    <Button type="submit">Submit Offer & Pay Scouting Fee</Button>
                 </div>
             </form>
         </Modal>

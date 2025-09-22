@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
 import { UserRole, Founder } from '../types'
-import { generateInvestorCode } from './utils'
+import { generateInvestorCode, generateInvestmentAdvisorCode } from './utils'
+import { getCurrentConfig } from '../config/environment'
 
 export interface AuthUser {
   id: string
@@ -18,13 +19,22 @@ export interface AuthUser {
   city?: string
   state?: string
   country?: string
+  currency?: string
   company?: string
+  company_type?: string // Added company type field
   // Verification documents from registration
   government_id?: string
   ca_license?: string
+  cs_license?: string
   verification_documents?: string[]
   profile_photo_url?: string
   is_profile_complete?: boolean // Added for profile completion status
+  // Investment Advisor specific fields
+  investment_advisor_code?: string
+  investment_advisor_code_entered?: string
+  logo_url?: string
+  proof_of_business_url?: string
+  financial_advisor_license_url?: string
 }
 
 export interface SignUpData {
@@ -33,6 +43,7 @@ export interface SignUpData {
   name: string
   role: UserRole
   startupName?: string
+  investmentAdvisorCode?: string
 }
 
 export interface SignInData {
@@ -71,8 +82,13 @@ export const authService = {
     try {
       console.log('Sending password reset email to:', email);
       
+      const config = getCurrentConfig();
+      const redirectUrl = config.passwordResetUrl || `${window.location.origin}/reset-password`;
+      
+      console.log('Using password reset redirect URL:', redirectUrl);
+      
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/reset-password`
+        redirectTo: redirectUrl
       });
 
       if (error) {
@@ -93,6 +109,27 @@ export const authService = {
     try {
       console.log('Resetting password...');
       
+      // First, verify the user is authenticated and in a valid session
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      
+      if (userError || !user) {
+        console.error('User not authenticated for password reset:', userError);
+        
+        // Try alternative approach - sometimes the session exists but getUser() fails
+        console.log('Trying alternative authentication check...');
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        
+        if (sessionError || !session?.user) {
+          console.error('No valid session found:', sessionError);
+          return { success: false, error: 'Invalid session. Please request a new password reset link.' };
+        }
+        
+        console.log('Session found for password reset:', session.user.email);
+      } else {
+        console.log('User authenticated for password reset:', user.email);
+      }
+      
+      // Update the password
       const { error } = await supabase.auth.updateUser({
         password: newPassword
       });
@@ -113,11 +150,12 @@ export const authService = {
   // Check if user profile is complete (has verification documents)
   async isProfileComplete(userId: string): Promise<boolean> {
     try {
-      const { data: profile, error } = await supabase
+      const { data: profiles, error } = await supabase
         .from('users')
         .select('government_id, ca_license, verification_documents')
-        .eq('id', userId)
-        .single();
+        .eq('id', userId);
+      
+      const profile = profiles && profiles.length > 0 ? profiles[0] : null;
 
       if (error || !profile) {
         return false;
@@ -179,6 +217,8 @@ export const authService = {
         role: profile.role,
         startup_name: profile.startup_name,
         investor_code: profile.investor_code,
+        investment_advisor_code: profile.investment_advisor_code,
+        investment_advisor_code_entered: profile.investment_advisor_code_entered,
         ca_code: profile.ca_code,
         cs_code: profile.cs_code,
         registration_date: profile.registration_date,
@@ -188,11 +228,15 @@ export const authService = {
         state: profile.state,
         country: profile.country,
         company: profile.company,
+        company_type: profile.company_type, // Added company type field
         government_id: profile.government_id,
         ca_license: profile.ca_license,
         cs_license: profile.cs_license,
         verification_documents: profile.verification_documents,
         profile_photo_url: profile.profile_photo_url,
+        logo_url: profile.logo_url,
+        proof_of_business_url: profile.proof_of_business_url,
+        financial_advisor_license_url: profile.financial_advisor_license_url,
         is_profile_complete: isComplete
       }
     } catch (error) {
@@ -206,6 +250,13 @@ export const authService = {
     try {
       console.log('=== SIGNUP START ===');
       console.log('Signing up user:', data.email);
+      
+      // Double-check if email already exists before proceeding
+      const emailCheck = await this.checkEmailExists(data.email);
+      if (emailCheck.exists) {
+        console.log('Email already exists, preventing signup:', data.email);
+        return { user: null, error: 'User with this email already exists. Please sign in instead.', confirmationRequired: false };
+      }
       
       // Create Supabase auth user directly
       console.log('Creating Supabase auth user...');
@@ -251,8 +302,9 @@ export const authService = {
       // Create user profile only after email confirmation
       if (authData.user && authData.user.email_confirmed_at) {
         console.log('Creating user profile in database...');
-        // Generate investor code if user is an investor
+        // Generate codes based on role
         const investorCode = data.role === 'Investor' ? generateInvestorCode() : null;
+        const investmentAdvisorCode = data.role === 'Investment Advisor' ? generateInvestmentAdvisorCode() : null;
         
         const { data: profile, error: profileError } = await supabase
           .from('users')
@@ -263,6 +315,9 @@ export const authService = {
             role: data.role,
             startup_name: data.role === 'Startup' ? data.startupName : null,
             investor_code: investorCode,
+            investment_advisor_code: investmentAdvisorCode,
+            // Store the Investment Advisor code entered by user (for Investors and Startups)
+            investment_advisor_code_entered: data.investmentAdvisorCode || null,
             ca_code: null, // CA code will be auto-generated by trigger
             registration_date: new Date().toISOString().split('T')[0],
             // Add verification document URLs
@@ -661,6 +716,36 @@ export const authService = {
     } catch (error) {
       console.error('Error refreshing session:', error)
       return { user: null, error: 'An unexpected error occurred' }
+    }
+  },
+
+  // Check if email exists
+  async checkEmailExists(email: string): Promise<{ exists: boolean; error?: string }> {
+    try {
+      console.log('Checking if email exists:', email);
+      
+      // Check our users table directly - this is more reliable and doesn't require admin privileges
+      const { data: profiles, error: profileError } = await supabase
+        .from('users')
+        .select('id')
+        .eq('email', email);
+
+      if (profileError) {
+        console.error('Error checking users table:', profileError);
+        return { exists: false, error: 'Unable to check email availability' };
+      }
+
+      // Check if any profiles were returned
+      if (profiles && profiles.length > 0) {
+        console.log('Email already exists:', email);
+        return { exists: true };
+      } else {
+        console.log('Email is available:', email);
+        return { exists: false };
+      }
+    } catch (error) {
+      console.error('Error checking email existence:', error);
+      return { exists: false, error: 'Unable to check email availability' };
     }
   }
 }

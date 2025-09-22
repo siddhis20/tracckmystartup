@@ -30,11 +30,13 @@ export enum FeeType {
     Hybrid = 'Hybrid',
 }
 
-export type UserRole = 'Investor' | 'Startup' | 'CA' | 'CS' | 'Admin' | 'Startup Facilitation Center';
+export type UserRole = 'Investor' | 'Startup' | 'CA' | 'CS' | 'Admin' | 'Startup Facilitation Center' | 'Investment Advisor';
 
 export interface Founder {
   name: string;
   email: string;
+  shares?: number;
+  equityPercentage?: number; // Direct equity percentage
 }
 
 export interface Startup {
@@ -49,11 +51,13 @@ export interface Startup {
   totalFunding: number;
   totalRevenue: number;
   registrationDate: string; // YYYY-MM-DD
+  currency?: string; // User preferred currency (USD, EUR, GBP, INR, etc.)
   founders: Founder[];
   profile?: ProfileData;
   complianceChecks?: ComplianceCheck[];
   financials?: FinancialRecord[];
   investments?: InvestmentRecord[];
+  esopReservedShares?: number; // Number of shares reserved for ESOP
 }
 
 export interface NewInvestment {
@@ -107,6 +111,7 @@ export interface Subsidiary {
 export interface InternationalOp {
   id: number;
   country: string;
+  companyType: string;
   startDate: string;
 }
 
@@ -114,12 +119,14 @@ export interface ProfileData {
   country: string;
   companyType: string;
   registrationDate: string;
+  currency?: string;
   subsidiaries: Subsidiary[];
   internationalOps: InternationalOp[];
   caServiceCode?: string;
   csServiceCode?: string;
   ca?: ServiceProvider;
   cs?: ServiceProvider;
+  investmentAdvisorCode?: string;
 }
 
 // New compliance task interface for dynamic generation
@@ -211,6 +218,9 @@ export interface InvestmentRecord {
     amount: number;
     equityAllocated: number;
     preMoneyValuation: number;
+    shares?: number; // Number of shares issued to investor
+    pricePerShare?: number; // Price per share for this investment
+    postMoneyValuation?: number; // Auto-calculated post-money valuation
     proofUrl?: string;
 }
 
@@ -330,4 +340,155 @@ export enum FinancialVertical {
     Healthtech = 'HealthTech',
     Edtech = 'EdTech',
     Other = 'Other'
+}
+
+// IP/Trademark related interfaces
+export enum IPType {
+    Trademark = 'Trademark',
+    Patent = 'Patent',
+    Copyright = 'Copyright',
+    TradeSecret = 'Trade Secret',
+    DomainName = 'Domain Name',
+    Other = 'Other'
+}
+
+export enum IPStatus {
+    Active = 'Active',
+    Pending = 'Pending',
+    Expired = 'Expired',
+    Abandoned = 'Abandoned',
+    Cancelled = 'Cancelled'
+}
+
+export enum IPDocumentType {
+    RegistrationCertificate = 'Registration Certificate',
+    ApplicationForm = 'Application Form',
+    RenewalDocument = 'Renewal Document',
+    AssignmentAgreement = 'Assignment Agreement',
+    LicenseAgreement = 'License Agreement',
+    Other = 'Other'
+}
+
+// Document verification related interfaces
+export enum DocumentVerificationStatus {
+    Pending = 'pending',
+    Verified = 'verified',
+    Rejected = 'rejected',
+    Expired = 'expired',
+    UnderReview = 'under_review'
+}
+
+export interface DocumentVerification {
+    id: string;
+    documentId: string;
+    documentType: string;
+    verificationStatus: DocumentVerificationStatus;
+    verifiedBy?: string;
+    verifiedAt?: string;
+    verificationNotes?: string;
+    rejectionReason?: string;
+    expiryDate?: string;
+    verificationMethod?: string;
+    confidenceScore?: number;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface DocumentVerificationRule {
+    id: string;
+    documentType: string;
+    verificationRequired: boolean;
+    autoVerification: boolean;
+    verificationExpiryDays: number;
+    requiredVerifierRole?: string;
+    verificationCriteria: any;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface DocumentVerificationHistory {
+    id: string;
+    documentVerificationId: string;
+    previousStatus?: DocumentVerificationStatus;
+    newStatus: DocumentVerificationStatus;
+    changedBy: string;
+    changeReason?: string;
+    changedAt: string;
+}
+
+export interface VerifyDocumentData {
+    documentId: string;
+    verifierEmail: string;
+    verificationStatus: DocumentVerificationStatus;
+    verificationNotes?: string;
+    confidenceScore?: number;
+}
+
+export interface IPTrademarkRecord {
+    id: string;
+    startupId: number;
+    type: IPType;
+    name: string;
+    description?: string;
+    registrationNumber?: string;
+    registrationDate?: string; // YYYY-MM-DD
+    expiryDate?: string; // YYYY-MM-DD
+    jurisdiction: string; // Country or region where registered
+    status: IPStatus;
+    owner?: string; // Who owns the IP (company name or individual)
+    filingDate?: string; // YYYY-MM-DD
+    priorityDate?: string; // YYYY-MM-DD
+    renewalDate?: string; // YYYY-MM-DD
+    estimatedValue?: number; // Estimated monetary value
+    notes?: string;
+    createdAt: string;
+    updatedAt: string;
+    documents?: IPTrademarkDocument[];
+}
+
+export interface IPTrademarkDocument {
+    id: string;
+    ipRecordId: string;
+    fileName: string;
+    fileUrl: string;
+    fileType: string;
+    fileSize: number;
+    documentType: IPDocumentType;
+    uploadedBy: string;
+    uploadedAt: string;
+    createdAt: string;
+}
+
+export interface CreateIPTrademarkRecordData {
+    type: IPType;
+    name: string;
+    description?: string;
+    registrationNumber?: string;
+    registrationDate?: string;
+    expiryDate?: string;
+    jurisdiction: string;
+    status?: IPStatus;
+    owner?: string;
+    filingDate?: string;
+    priorityDate?: string;
+    renewalDate?: string;
+    estimatedValue?: number;
+    notes?: string;
+}
+
+export interface UpdateIPTrademarkRecordData {
+    type?: IPType;
+    name?: string;
+    description?: string;
+    registrationNumber?: string;
+    registrationDate?: string;
+    expiryDate?: string;
+    jurisdiction?: string;
+    status?: IPStatus;
+    owner?: string;
+    filingDate?: string;
+    priorityDate?: string;
+    renewalDate?: string;
+    estimatedValue?: number;
+    notes?: string;
 }
