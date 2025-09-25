@@ -92,3 +92,4 @@ FROM fundraising_details fd
 LEFT JOIN startups s ON fd.startup_id = s.id
 WHERE fd.active = true
 LIMIT 5;
+

@@ -50,3 +50,4 @@ SELECT
     contact_details_revealed_at
 FROM investment_offers
 WHERE id = 37;
+
